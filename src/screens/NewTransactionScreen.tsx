@@ -469,7 +469,7 @@ const styles = StyleSheet.create({
   amountBox: { alignItems: 'center', paddingVertical: spacing.xl },
   amountLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: spacing.xs },
   amount: { fontSize: 44, fontWeight: '800', textAlign: 'center' },
-  amountInput: { ...StyleSheet.absoluteFillObject, color: 'transparent', opacity: 0.02, fontSize: 44 },
+  amountInput: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, color: 'transparent', opacity: 0.02, fontSize: 44 },
   label: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: spacing.sm, marginTop: spacing.sm },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.lg },
   catItem: {

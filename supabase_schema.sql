@@ -135,6 +135,29 @@ create index if not exists idx_metas_usuario       on public.metas_cofrinhos (us
 -- 3. PERFIL AUTOMÁTICO + CATEGORIAS PADRÃO APÓS SIGNUP
 -- ---------------------------------------------------------------------
 
+-- Categorias padrão de um usuário (usada pela trigger e pela correção abaixo).
+create or replace function public.fn_criar_categorias_padrao(p_usuario_id uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into public.categorias (usuario_id, nome, tipo, icone) values
+    (p_usuario_id, 'Alimentação',     'DESPESA', '🍽️'),
+    (p_usuario_id, 'Transporte',      'DESPESA', '🚌'),
+    (p_usuario_id, 'Moradia',         'DESPESA', '🏠'),
+    (p_usuario_id, 'Lazer',           'DESPESA', '🎮'),
+    (p_usuario_id, 'Saúde',           'DESPESA', '🏥'),
+    (p_usuario_id, 'Compras',         'DESPESA', '🛒'),
+    (p_usuario_id, 'Educação',        'DESPESA', '📚'),
+    (p_usuario_id, 'Assinaturas',     'DESPESA', '📺'),
+    (p_usuario_id, 'Outros',          'DESPESA', '📦'),
+    (p_usuario_id, 'Salário',         'RECEITA', '💰'),
+    (p_usuario_id, 'Freelance',       'RECEITA', '💻'),
+    (p_usuario_id, 'Investimentos',   'RECEITA', '📈'),
+    (p_usuario_id, 'Outras receitas', 'RECEITA', '💵');
+$$;
+
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -154,20 +177,9 @@ begin
   )
   on conflict (id) do nothing;
 
-  insert into public.categorias (usuario_id, nome, tipo, icone) values
-    (new.id, 'Alimentação',   'DESPESA', '🍽️'),
-    (new.id, 'Transporte',    'DESPESA', '🚌'),
-    (new.id, 'Moradia',       'DESPESA', '🏠'),
-    (new.id, 'Lazer',         'DESPESA', '🎮'),
-    (new.id, 'Saúde',         'DESPESA', '🏥'),
-    (new.id, 'Compras',       'DESPESA', '🛒'),
-    (new.id, 'Educação',      'DESPESA', '📚'),
-    (new.id, 'Assinaturas',   'DESPESA', '📺'),
-    (new.id, 'Outros',        'DESPESA', '📦'),
-    (new.id, 'Salário',       'RECEITA', '💰'),
-    (new.id, 'Freelance',     'RECEITA', '💻'),
-    (new.id, 'Investimentos', 'RECEITA', '📈'),
-    (new.id, 'Outras receitas', 'RECEITA', '💵');
+  if not exists (select 1 from public.categorias where usuario_id = new.id) then
+    perform public.fn_criar_categorias_padrao(new.id);
+  end if;
 
   return new;
 end;
@@ -511,8 +523,32 @@ create policy "transacoes_owner_all" on public.transacoes
 
 revoke execute on function public.fn_recalcular_fatura(uuid) from public, anon, authenticated;
 revoke execute on function public.handle_new_user() from public, anon, authenticated;
+revoke execute on function public.fn_criar_categorias_padrao(uuid) from public, anon, authenticated;
 grant execute on function public.fn_obter_ou_criar_fatura(uuid, date) to authenticated;
 grant execute on function public.pagar_fatura(uuid, uuid) to authenticated;
 grant execute on function public.aportar_meta(uuid, numeric, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 10. CORREÇÃO DE CONTAS EXISTENTES
+-- ---------------------------------------------------------------------
+-- A trigger só roda em cadastros novos. Usuários criados no Auth antes
+-- deste script ganham aqui o perfil e as categorias padrão que faltam
+-- (sem perfil, qualquer insert em contas falha com contas_usuario_id_fkey).
+
+insert into public.usuarios (id, nome, email)
+select
+  u.id,
+  coalesce(
+    nullif(u.raw_user_meta_data ->> 'nome', ''),
+    nullif(u.raw_user_meta_data ->> 'full_name', ''),
+    split_part(coalesce(u.email, ''), '@', 1)
+  ),
+  coalesce(u.email, '')
+from auth.users u
+where not exists (select 1 from public.usuarios p where p.id = u.id);
+
+select public.fn_criar_categorias_padrao(p.id)
+from public.usuarios p
+where not exists (select 1 from public.categorias c where c.usuario_id = p.id);
 
 -- Fim do schema Trincash
