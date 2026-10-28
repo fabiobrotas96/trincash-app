@@ -36,7 +36,10 @@ import {
 import { carregarPessoas, resumoPorPessoa } from '../services/finance';
 import { errorMessage, getUserId, supabase } from '../services/supabase';
 import { BANDEIRAS, CARD_COLORS, colors, radius, spacing } from '../theme';
-import type { CartaoCredito, Conta, FaturaCartao, Pessoa, StatusFatura, TransacaoDetalhada } from '../types';
+import type { CartaoCredito, Conta, FaturaCartao, Pessoa, StatusFatura, Transacao, TransacaoDetalhada } from '../types';
+
+/** Lançamento de fatura em aberto, para calcular quanto cada pessoa deve. */
+type LancamentoEmAberto = Pick<Transacao, 'tipo' | 'valor' | 'pessoa_id' | 'dividido' | 'cartao_id'>;
 import {
   calcularCicloFatura,
   formatCurrency,
@@ -97,6 +100,7 @@ export default function CartoesScreen() {
   const [editandoId, setEditandoId] = useState<string | null>(null);
   const [pessoas, setPessoas] = useState<Pessoa[]>([]);
   const [pessoasModal, setPessoasModal] = useState(false);
+  const [emAberto, setEmAberto] = useState<LancamentoEmAberto[]>([]);
 
   // Modal pagar fatura
   const [payModal, setPayModal] = useState(false);
@@ -119,8 +123,23 @@ export default function CartoesScreen() {
       if (faturasRes.error) throw faturasRes.error;
       if (contasRes.error) throw contasRes.error;
       const ks = ((cartoesRes.data ?? []) as CartaoCredito[]).map((k) => ({ ...k, limite_total: toNumber(k.limite_total) }));
+      const fs = ((faturasRes.data ?? []) as FaturaCartao[]).map((f) => ({ ...f, valor_total: toNumber(f.valor_total) }));
+
+      // Lançamentos das faturas não pagas (inclui parcelas futuras): base do "quanto cada um deve".
+      const idsAbertas = fs.filter((f) => f.status !== 'PAGA').map((f) => f.id);
+      if (idsAbertas.length) {
+        const { data: abertos, error: errAbertos } = await supabase
+          .from('transacoes')
+          .select('tipo, valor, pessoa_id, dividido, cartao_id')
+          .in('fatura_id', idsAbertas);
+        if (errAbertos) throw errAbertos;
+        setEmAberto(((abertos ?? []) as LancamentoEmAberto[]).map((t) => ({ ...t, valor: toNumber(t.valor) })));
+      } else {
+        setEmAberto([]);
+      }
+
       setCartoes(ks);
-      setFaturas(((faturasRes.data ?? []) as FaturaCartao[]).map((f) => ({ ...f, valor_total: toNumber(f.valor_total) })));
+      setFaturas(fs);
       setContas(((contasRes.data ?? []) as Conta[]).map((c) => ({ ...c, saldo: toNumber(c.saldo) })));
       setSelectedIdx((i) => Math.min(i, Math.max(0, ks.length - 1)));
     } catch (err) {
@@ -356,6 +375,16 @@ export default function CartoesScreen() {
 
   const statusSel = faturaSel ? statusEfetivo(faturaSel) : null;
   const resumoFatura = resumoPorPessoa(transacoes, pessoas);
+  // Quanto cada pessoa deve: no cartão selecionado e somando todos os cartões compartilhados.
+  const cartoesCompartilhados = new Set(cartoes.filter((k) => k.conjunto).map((k) => k.id));
+  const deveNoCartao = resumoPorPessoa(
+    emAberto.filter((t) => t.cartao_id === cartao?.id),
+    pessoas,
+  );
+  const deveTotal = resumoPorPessoa(
+    emAberto.filter((t) => t.cartao_id && cartoesCompartilhados.has(t.cartao_id)),
+    pessoas,
+  );
 
   const alternarConjunto = (k: CartaoCredito) => {
     const virar = !k.conjunto;
@@ -442,6 +471,15 @@ export default function CartoesScreen() {
                 color={limiteDisponivel < 0 ? colors.danger : fracaoDisponivel < 0.2 ? colors.warning : colors.success}
               />
             </Card>
+
+            {/* Quanto cada pessoa deve, somando todos os cartões compartilhados */}
+            {cartoesCompartilhados.size > 0 && pessoas.length > 0 ? (
+              <GastosPorPessoaCard
+                resumo={deveTotal}
+                titulo={`Quanto cada um deve • ${cartoesCompartilhados.size} ${cartoesCompartilhados.size === 1 ? 'cartão compartilhado' : 'cartões compartilhados'}`}
+                onGerenciar={() => setPessoasModal(true)}
+              />
+            ) : null}
 
             {/* Carrossel de cartões */}
             <ScrollView
@@ -607,11 +645,15 @@ export default function CartoesScreen() {
 
                 {cartao.conjunto ? (
                   <>
-                    <SectionTitle title="Gastos por pessoa" />
+                    <SectionTitle title="Quanto cada um deve neste cartão" />
+                    <GastosPorPessoaCard
+                      resumo={deveNoCartao}
+                      titulo="Todas as faturas em aberto (com parcelas futuras)"
+                      onGerenciar={() => setPessoasModal(true)}
+                    />
                     <GastosPorPessoaCard
                       resumo={resumoFatura}
-                      titulo={faturaSel ? `Fatura ${formatMesAno(faturaSel.mes_ano_referencia)}` : 'Fatura'}
-                      onGerenciar={() => setPessoasModal(true)}
+                      titulo={faturaSel ? `Só a fatura ${formatMesAno(faturaSel.mes_ano_referencia)}` : 'Fatura selecionada'}
                     />
                   </>
                 ) : null}
