@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
-import { useCallback, useEffect, useState } from 'react';
-import { Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert } from '../utils/alert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   BottomSheet,
@@ -16,10 +17,15 @@ import {
   SegmentedControl,
   type IconName,
 } from '../components/ui';
-import { carregarStatusOrcamentos, type StatusOrcamento } from '../services/finance';
+import { BancoLogo, BancoSelector } from '../components/Logos';
+import { PessoasEditor } from '../components/Pessoas';
+import { bancoDe, detectarBanco } from '../services/bancos';
+import { carregarPessoas, carregarStatusOrcamentos, type StatusOrcamento } from '../services/finance';
+import { useConfig } from '../services/config';
+import { notificarOrcamento } from '../services/notificacoes';
 import { errorMessage, getUserId, supabase } from '../services/supabase';
 import { colors, radius, spacing } from '../theme';
-import type { Conta, TipoConta, TipoTransacao } from '../types';
+import type { Conta, Pessoa, TipoConta, TipoTransacao } from '../types';
 import { formatCurrency, parseValor, toNumber } from '../utils/format';
 
 const TIPO_CONTA_LABEL: Record<TipoConta, string> = {
@@ -36,10 +42,15 @@ const TIPO_CONTA_ICON: Record<TipoConta, IconName> = {
 export default function DashboardScreen() {
   const navigation = useNavigation();
   const isFocused = useIsFocused();
+  const { config, atualizar } = useConfig();
+  const notifOrcamentoRef = useRef(config.notifOrcamento);
+  notifOrcamentoRef.current = config.notifOrcamento;
 
   const [nome, setNome] = useState('');
   const [contas, setContas] = useState<Conta[]>([]);
   const [alertas, setAlertas] = useState<StatusOrcamento[]>([]);
+  const [pessoas, setPessoas] = useState<Pessoa[]>([]);
+  const [patrimonioExtra, setPatrimonioExtra] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,19 +60,34 @@ export default function DashboardScreen() {
   const [novaNome, setNovaNome] = useState('');
   const [novaSaldo, setNovaSaldo] = useState('');
   const [novaTipo, setNovaTipo] = useState<TipoConta>('CORRENTE');
+  const [novaConjunta, setNovaConjunta] = useState(false);
+  /** Banco escolhido no formulário (null = usar o reconhecido pelo nome). */
+  const [novaBanco, setNovaBanco] = useState<string | null>(null);
+  /** Conta em edição (null = criando uma nova). */
+  const [contaEdit, setContaEdit] = useState<Conta | null>(null);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
       const userId = await getUserId();
-      const [perfilRes, contasRes, orcamentos] = await Promise.all([
+      const [perfilRes, contasRes, orcamentos, pessoasList, invRes, bensRes] = await Promise.all([
         supabase.from('usuarios').select('nome').eq('id', userId).maybeSingle(),
         supabase.from('contas').select('*').order('data_criacao', { ascending: true }),
         carregarStatusOrcamentos(),
+        carregarPessoas(),
+        supabase.from('investimentos').select('valor_atual'),
+        supabase.from('bens').select('valor_estimado, saldo_devedor'),
       ]);
       if (perfilRes.error) throw perfilRes.error;
       if (contasRes.error) throw contasRes.error;
+      if (invRes.error) throw invRes.error;
+      if (bensRes.error) throw bensRes.error;
+      setPessoas(pessoasList);
+      setPatrimonioExtra(
+        (invRes.data ?? []).reduce((a, i) => a + toNumber(i.valor_atual), 0) +
+          (bensRes.data ?? []).reduce((a, b) => a + toNumber(b.valor_estimado) - toNumber(b.saldo_devedor), 0),
+      );
 
       setNome((perfilRes.data?.nome as string | undefined) ?? '');
       setContas(((contasRes.data ?? []) as Conta[]).map((c) => ({ ...c, saldo: toNumber(c.saldo) })));
@@ -70,9 +96,15 @@ export default function DashboardScreen() {
       setAlertas(emAlerta);
 
       // Marca os alertas como enviados (exibidos) para o mês corrente.
-      const pendentes = emAlerta.filter((o) => !o.orcamento.status_alerta_enviado).map((o) => o.orcamento.id);
-      if (pendentes.length) {
-        await supabase.from('orcamentos_categorias').update({ status_alerta_enviado: true }).in('id', pendentes);
+      const novos = emAlerta.filter((o) => !o.orcamento.status_alerta_enviado);
+      if (novos.length) {
+        if (notifOrcamentoRef.current) {
+          for (const o of novos) notificarOrcamento(o.categoria.nome, o.percentual).catch(() => undefined);
+        }
+        await supabase
+          .from('orcamentos_categorias')
+          .update({ status_alerta_enviado: true })
+          .in('id', novos.map((o) => o.orcamento.id));
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -92,24 +124,23 @@ export default function DashboardScreen() {
   const irParaNovo = (tipo: TipoTransacao) =>
     navigation.navigate('Tabs', { screen: 'Novo', params: { tipo, nonce: Date.now() } });
 
-  const handleLogout = () => {
-    Alert.alert('Sair', 'Deseja sair da sua conta?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Sair',
-        style: 'destructive',
-        onPress: async () => {
-          const { error: err } = await supabase.auth.signOut();
-          if (err) Alert.alert('Erro', errorMessage(err));
-        },
-      },
-    ]);
-  };
-
   const abrirModal = () => {
     setNovaNome('');
     setNovaSaldo('');
     setNovaTipo('CORRENTE');
+    setNovaConjunta(false);
+    setNovaBanco(null);
+    setContaEdit(null);
+    setModalVisible(true);
+  };
+
+  const editarConta = (conta: Conta) => {
+    setNovaNome(conta.nome);
+    setNovaSaldo(String(conta.saldo).replace('.', ','));
+    setNovaTipo(conta.tipo);
+    setNovaConjunta(!!conta.conjunta);
+    setNovaBanco(conta.banco_codigo);
+    setContaEdit(conta);
     setModalVisible(true);
   };
 
@@ -126,16 +157,40 @@ export default function DashboardScreen() {
     }
     setSaving(true);
     try {
-      const usuario_id = await getUserId();
-      const { error: err } = await supabase.from('contas').insert({ usuario_id, nome: nomeConta, saldo, tipo: novaTipo });
+      const banco_codigo = novaBanco ?? (novaTipo === 'DINHEIRO' ? null : detectarBanco(nomeConta));
+      const campos = { nome: nomeConta, saldo, tipo: novaTipo, conjunta: novaConjunta, banco_codigo };
+      const { error: err } = contaEdit
+        ? await supabase.from('contas').update(campos).eq('id', contaEdit.id)
+        : await supabase.from('contas').insert({ ...campos, usuario_id: await getUserId() });
       if (err) throw err;
       setModalVisible(false);
       await load();
     } catch (err) {
-      Alert.alert('Erro ao criar conta', errorMessage(err));
+      Alert.alert(contaEdit ? 'Erro ao salvar conta' : 'Erro ao criar conta', errorMessage(err));
     } finally {
       setSaving(false);
     }
+  };
+
+  const excluirConta = () => {
+    if (!contaEdit) return;
+    Alert.alert(
+      'Excluir conta',
+      `Excluir "${contaEdit.nome}"? Todos os lançamentos dela também serão apagados. Isso não pode ser desfeito.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Excluir',
+          style: 'destructive',
+          onPress: async () => {
+            const { error: err } = await supabase.from('contas').delete().eq('id', contaEdit.id);
+            if (err) return Alert.alert('Erro ao excluir conta', errorMessage(err));
+            setModalVisible(false);
+            load();
+          },
+        },
+      ],
+    );
   };
 
   if (loading) {
@@ -151,6 +206,7 @@ export default function DashboardScreen() {
     { label: 'Despesa', icon: 'arrow-up', color: colors.danger, onPress: () => irParaNovo('DESPESA') },
     { label: 'Transferir', icon: 'swap-horizontal', color: colors.primary, onPress: () => irParaNovo('TRANSFERENCIA') },
     { label: 'Cartões', icon: 'card', color: colors.warning, onPress: () => navigation.navigate('Tabs', { screen: 'Cartoes' }) },
+    { label: 'Patrimônio', icon: 'diamond-outline', color: colors.gold, onPress: () => navigation.navigate('Patrimonio') },
   ];
 
   return (
@@ -176,10 +232,10 @@ export default function DashboardScreen() {
               Olá, {nome || 'você'}!
             </Text>
           </View>
-          <TouchableOpacity style={styles.avatar} onPress={handleLogout} accessibilityLabel="Perfil e sair">
+          <TouchableOpacity style={styles.avatar} onPress={() => navigation.navigate('Configuracoes')} accessibilityLabel="Configurações">
             <Text style={styles.avatarText}>{(nome || '?').charAt(0).toUpperCase()}</Text>
             <View style={styles.logoutBadge}>
-              <Ionicons name="log-out-outline" size={11} color={colors.text} />
+              <Ionicons name="settings-outline" size={11} color={colors.text} />
             </View>
           </TouchableOpacity>
         </View>
@@ -189,7 +245,15 @@ export default function DashboardScreen() {
         {/* Saldo consolidado */}
         <Card style={styles.balanceCard}>
           <View style={styles.rowBetween}>
-            <Text style={styles.balanceLabel}>Saldo consolidado</Text>
+            <TouchableOpacity
+              style={styles.olho}
+              onPress={() => atualizar({ ocultarValores: !config.ocultarValores })}
+              hitSlop={8}
+              accessibilityLabel={config.ocultarValores ? 'Mostrar valores' : 'Ocultar valores'}
+            >
+              <Text style={styles.balanceLabel}>Saldo consolidado</Text>
+              <Ionicons name={config.ocultarValores ? 'eye-off-outline' : 'eye-outline'} size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
             <View style={[styles.statusPill, { backgroundColor: positivo ? 'rgba(56,161,105,0.15)' : 'rgba(229,62,62,0.15)' }]}>
               <View style={[styles.statusDot, { backgroundColor: positivo ? colors.success : colors.danger }]} />
               <Text style={{ color: positivo ? colors.success : colors.danger, fontWeight: '700', fontSize: 12 }}>
@@ -217,6 +281,19 @@ export default function DashboardScreen() {
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Patrimônio */}
+        <TouchableOpacity activeOpacity={0.8} onPress={() => navigation.navigate('Patrimonio')}>
+          <Card style={styles.patrimonioCard}>
+            <Ionicons name="diamond-outline" size={22} color={colors.gold} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.balanceLabel}>Patrimônio total</Text>
+              <Text style={styles.patrimonioValor}>{formatCurrency(saldoTotal + patrimonioExtra)}</Text>
+              <Text style={styles.balanceSub}>Contas + investimentos + bens</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </Card>
+        </TouchableOpacity>
 
         {/* Alertas de orçamento */}
         {alertas.length > 0 ? (
@@ -247,6 +324,7 @@ export default function DashboardScreen() {
 
         {/* Minhas contas */}
         <SectionTitle title="Minhas Contas" action={<LinkButton title="+ Adicionar" onPress={abrirModal} />} />
+        {contas.length > 0 ? <Text style={styles.hint}>Segure uma conta para editar (nome, saldo, conjunta) ou excluir.</Text> : null}
         {contas.length === 0 ? (
           <Card style={{ alignItems: 'center', gap: spacing.sm }}>
             <Ionicons name="wallet-outline" size={32} color={colors.textMuted} />
@@ -260,13 +338,21 @@ export default function DashboardScreen() {
               activeOpacity={0.7}
               style={styles.accountCard}
               onPress={() => navigation.navigate('ExtratoDetalhe', { contaId: conta.id, contaNome: conta.nome })}
+              onLongPress={() => editarConta(conta)}
             >
-              <View style={styles.accountIcon}>
-                <Ionicons name={TIPO_CONTA_ICON[conta.tipo]} size={20} color={colors.primary} />
-              </View>
+              {bancoDe(conta) && conta.tipo !== 'DINHEIRO' ? (
+                <BancoLogo codigo={bancoDe(conta)} size={42} />
+              ) : (
+                <View style={styles.accountIcon}>
+                  <Ionicons name={TIPO_CONTA_ICON[conta.tipo]} size={20} color={colors.primary} />
+                </View>
+              )}
               <View style={{ flex: 1 }}>
                 <Text style={styles.accountName}>{conta.nome}</Text>
-                <Text style={styles.accountType}>{TIPO_CONTA_LABEL[conta.tipo]}</Text>
+                <Text style={styles.accountType}>
+                  {TIPO_CONTA_LABEL[conta.tipo]}
+                  {conta.conjunta ? ' • 👥 Conjunta' : ''}
+                </Text>
               </View>
               <Text style={[styles.accountBalance, conta.saldo < 0 && { color: colors.danger }]}>
                 {formatCurrency(conta.saldo)}
@@ -278,10 +364,13 @@ export default function DashboardScreen() {
       </ScrollView>
 
       {/* Modal nova conta */}
-      <BottomSheet visible={modalVisible} title="Nova conta" onClose={() => setModalVisible(false)}>
+      <BottomSheet visible={modalVisible} title={contaEdit ? 'Editar conta' : 'Nova conta'} onClose={() => setModalVisible(false)}>
         <Input label="Nome da conta" placeholder="Ex: Nubank, Carteira" value={novaNome} onChangeText={setNovaNome} />
+        {novaTipo !== 'DINHEIRO' ? (
+          <BancoSelector value={novaBanco} onChange={setNovaBanco} reconhecido={detectarBanco(novaNome)} />
+        ) : null}
         <Input
-          label="Saldo inicial"
+          label={contaEdit ? 'Saldo atual' : 'Saldo inicial'}
           placeholder="0,00"
           value={novaSaldo}
           onChangeText={(t) => setNovaSaldo(t.replace(/[^0-9.,-]/g, ''))}
@@ -297,7 +386,38 @@ export default function DashboardScreen() {
           value={novaTipo}
           onChange={setNovaTipo}
         />
-        <PrimaryButton title="Criar conta" onPress={criarConta} loading={saving} style={{ marginTop: spacing.xl }} />
+        <TouchableOpacity style={styles.toggleRow} onPress={() => setNovaConjunta((v) => !v)}>
+          <Ionicons name={novaConjunta ? 'checkbox' : 'square-outline'} size={22} color={novaConjunta ? colors.primary : colors.textMuted} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.toggleTitle}>Conta conjunta</Text>
+            <Text style={styles.balanceSub}>Cada lançamento indica quem gastou ou se foi dividido</Text>
+          </View>
+        </TouchableOpacity>
+        {novaConjunta ? (
+          <View style={{ marginTop: spacing.md }}>
+            <Text style={styles.modalLabel}>Pessoas que dividem a conta</Text>
+            <PessoasEditor
+              pessoas={pessoas}
+              onChange={() => carregarPessoas().then(setPessoas).catch(() => undefined)}
+            />
+          </View>
+        ) : null}
+        {contaEdit ? (
+          <Text style={[styles.hint, { marginTop: spacing.md, marginBottom: 0 }]}>
+            Alterar o saldo é um ajuste manual: não cria lançamento no extrato.
+          </Text>
+        ) : null}
+        <PrimaryButton
+          title={contaEdit ? 'Salvar alterações' : 'Criar conta'}
+          onPress={criarConta}
+          loading={saving}
+          style={{ marginTop: spacing.xl }}
+        />
+        {contaEdit ? (
+          <TouchableOpacity onPress={excluirConta} style={{ alignSelf: 'center', padding: spacing.md }}>
+            <Text style={{ color: colors.danger, fontWeight: '700' }}>Excluir conta</Text>
+          </TouchableOpacity>
+        ) : null}
       </BottomSheet>
     </SafeAreaView>
   );
@@ -376,5 +496,11 @@ const styles = StyleSheet.create({
   accountName: { color: colors.text, fontSize: 15, fontWeight: '700' },
   accountType: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   accountBalance: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  hint: { color: colors.textMuted, fontSize: 11, marginTop: -spacing.sm, marginBottom: spacing.sm },
+  olho: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  patrimonioCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.xl },
+  patrimonioValor: { color: colors.text, fontSize: 22, fontWeight: '800', marginTop: 2 },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.lg },
+  toggleTitle: { color: colors.text, fontWeight: '700', fontSize: 15 },
   modalLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: 6 },
 });

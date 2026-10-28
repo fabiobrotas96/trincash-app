@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert } from '../utils/alert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   BottomSheet,
@@ -78,6 +79,9 @@ export default function RelatoriosMetasScreen() {
   const [metaNome, setMetaNome] = useState('');
   const [metaAlvo, setMetaAlvo] = useState('');
   const [metaIcone, setMetaIcone] = useState(META_ICONES[0]);
+  const [metaAtual, setMetaAtual] = useState('');
+  /** Meta em edição (null = criando uma nova). */
+  const [metaEdit, setMetaEdit] = useState<MetaCofrinho | null>(null);
   const [aporteMeta, setAporteMeta] = useState<MetaCofrinho | null>(null);
   const [aporteValor, setAporteValor] = useState('');
   const [aporteConta, setAporteConta] = useState<string | null>(null);
@@ -241,6 +245,17 @@ export default function RelatoriosMetasScreen() {
     setMetaNome('');
     setMetaAlvo('');
     setMetaIcone(META_ICONES[0]);
+    setMetaAtual('');
+    setMetaEdit(null);
+    setMetaModal(true);
+  };
+
+  const editarMeta = (m: MetaCofrinho) => {
+    setMetaNome(m.nome);
+    setMetaAlvo(String(m.valor_alvo).replace('.', ','));
+    setMetaIcone(m.icone);
+    setMetaAtual(String(m.valor_atual).replace('.', ','));
+    setMetaEdit(m);
     setMetaModal(true);
   };
 
@@ -248,17 +263,23 @@ export default function RelatoriosMetasScreen() {
     const alvo = parseValor(metaAlvo);
     if (!metaNome.trim()) return Alert.alert('Atenção', 'Dê um nome para sua meta.');
     if (Number.isNaN(alvo) || alvo <= 0) return Alert.alert('Atenção', 'Informe o valor alvo.');
+    const atual = metaAtual.trim() ? parseValor(metaAtual) : 0;
+    if (Number.isNaN(atual) || atual < 0) return Alert.alert('Atenção', 'Valor guardado inválido.');
     setSaving(true);
     try {
-      const usuario_id = await getUserId();
-      const { error: err } = await supabase
-        .from('metas_cofrinhos')
-        .insert({ usuario_id, nome: metaNome.trim(), valor_alvo: alvo, icone: metaIcone });
+      const { error: err } = metaEdit
+        ? await supabase
+            .from('metas_cofrinhos')
+            .update({ nome: metaNome.trim(), valor_alvo: alvo, icone: metaIcone, valor_atual: atual })
+            .eq('id', metaEdit.id)
+        : await supabase
+            .from('metas_cofrinhos')
+            .insert({ usuario_id: await getUserId(), nome: metaNome.trim(), valor_alvo: alvo, icone: metaIcone });
       if (err) throw err;
       setMetaModal(false);
       await loadResto();
     } catch (err) {
-      Alert.alert('Erro ao criar meta', errorMessage(err));
+      Alert.alert(metaEdit ? 'Erro ao salvar meta' : 'Erro ao criar meta', errorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -300,7 +321,10 @@ export default function RelatoriosMetasScreen() {
         onPress: async () => {
           const { error: err } = await supabase.from('metas_cofrinhos').delete().eq('id', m.id);
           if (err) Alert.alert('Erro', errorMessage(err));
-          else loadResto();
+          else {
+            setMetaModal(false);
+            loadResto();
+          }
         },
       },
     ]);
@@ -470,7 +494,7 @@ export default function RelatoriosMetasScreen() {
             const pct = m.valor_alvo > 0 ? m.valor_atual / m.valor_alvo : 0;
             const concluida = pct >= 1;
             return (
-              <TouchableOpacity key={m.id} activeOpacity={0.9} onLongPress={() => excluirMeta(m)}>
+              <TouchableOpacity key={m.id} activeOpacity={0.9} onPress={() => editarMeta(m)} onLongPress={() => excluirMeta(m)}>
                 <Card style={styles.metaCard}>
                   <View style={styles.metaHeader}>
                     <View style={styles.metaIcon}>
@@ -490,7 +514,7 @@ export default function RelatoriosMetasScreen() {
                       {concluida ? '🎉 Meta concluída!' : `Faltam ${formatCurrency(m.valor_alvo - m.valor_atual)}`}
                     </Text>
                     <TouchableOpacity style={styles.guardarBtn} onPress={() => abrirAporte(m)}>
-                      <Ionicons name="add-circle" size={16} color={colors.text} />
+                      <Ionicons name="add-circle" size={16} color={colors.onAccent} />
                       <Text style={styles.guardarText}>Guardar Dinheiro</Text>
                     </TouchableOpacity>
                   </View>
@@ -526,7 +550,7 @@ export default function RelatoriosMetasScreen() {
       </BottomSheet>
 
       {/* Modal: nova meta */}
-      <BottomSheet visible={metaModal} title="Nova meta" onClose={() => setMetaModal(false)}>
+      <BottomSheet visible={metaModal} title={metaEdit ? 'Editar meta' : 'Nova meta'} onClose={() => setMetaModal(false)}>
         <Input label="Nome" placeholder="Ex: Reserva de Emergência" value={metaNome} onChangeText={setMetaNome} />
         <Input
           label="Valor alvo (R$)"
@@ -547,7 +571,26 @@ export default function RelatoriosMetasScreen() {
             </TouchableOpacity>
           ))}
         </View>
-        <PrimaryButton title="Criar meta" onPress={salvarMeta} loading={saving} style={{ marginTop: spacing.md }} />
+        {metaEdit ? (
+          <Input
+            label="Valor já guardado (R$)"
+            placeholder="0,00"
+            value={metaAtual}
+            onChangeText={(t) => setMetaAtual(t.replace(/[^0-9.,]/g, ''))}
+            keyboardType="decimal-pad"
+          />
+        ) : null}
+        <PrimaryButton
+          title={metaEdit ? 'Salvar alterações' : 'Criar meta'}
+          onPress={salvarMeta}
+          loading={saving}
+          style={{ marginTop: spacing.md }}
+        />
+        {metaEdit ? (
+          <TouchableOpacity onPress={() => excluirMeta(metaEdit)} style={{ alignSelf: 'center', padding: spacing.md }}>
+            <Text style={{ color: colors.danger, fontWeight: '700' }}>Excluir meta</Text>
+          </TouchableOpacity>
+        ) : null}
       </BottomSheet>
 
       {/* Modal: guardar dinheiro */}
@@ -619,7 +662,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: radius.pill,
   },
-  guardarText: { color: colors.text, fontWeight: '700', fontSize: 12 },
+  guardarText: { color: colors.onAccent, fontWeight: '700', fontSize: 12 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
   iconPick: {
     width: 46,

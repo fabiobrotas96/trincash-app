@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRef, useState, type ComponentRef } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -13,6 +12,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ErrorBanner, Input, PrimaryButton, type IconName } from '../components/ui';
 import { errorMessage, isSupabaseConfigured, supabase } from '../services/supabase';
@@ -220,7 +220,7 @@ export default function LoginScreen() {
               <View style={styles.divider} />
             </View>
 
-            <TouchableOpacity style={[styles.social, { backgroundColor: colors.text }]} onPress={() => socialLogin('Apple')}>
+            <TouchableOpacity style={[styles.social, { backgroundColor: '#FFFFFF' }]} onPress={() => socialLogin('Apple')}>
               <Ionicons name="logo-apple" size={20} color="#000" />
               <Text style={[styles.socialText, { color: '#000' }]}>Entrar com Apple</Text>
             </TouchableOpacity>
@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logoText: { color: colors.text, fontWeight: '800', fontSize: 20 },
+  logoText: { color: colors.onAccent, fontWeight: '800', fontSize: 20 },
   brand: { color: colors.text, fontSize: 22, fontWeight: '800', letterSpacing: 0.3 },
   slide: {
     backgroundColor: colors.card,

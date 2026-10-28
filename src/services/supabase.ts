@@ -115,6 +115,12 @@ export async function getUserId(): Promise<string> {
 export function errorMessage(err: unknown): string {
   if (!err) return 'Erro desconhecido';
   if (typeof err === 'string') return err;
+  // Tabela (PGRST205/42P01), coluna (42703/PGRST204) ou função (PGRST202) inexistente:
+  // o banco está numa versão anterior do supabase_schema.sql.
+  const code = typeof err === 'object' && 'code' in err ? String((err as { code: unknown }).code) : '';
+  if (['PGRST205', '42P01', '42703', 'PGRST204', 'PGRST202'].includes(code)) {
+    return 'Banco de dados desatualizado: execute novamente o supabase_schema.sql no SQL Editor do Supabase.';
+  }
   if (typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string') {
     return (err as { message: string }).message;
   }

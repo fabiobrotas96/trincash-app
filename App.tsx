@@ -1,30 +1,37 @@
 import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { DarkTheme, NavigationContainer, type Theme } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, NavigationContainer, type Theme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { Session } from '@supabase/supabase-js';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { BloqueioScreen } from './src/components/BloqueioScreen';
 import { Loading, type IconName } from './src/components/ui';
 import CartoesScreen from './src/screens/CartoesScreen';
+import ConfiguracoesScreen from './src/screens/ConfiguracoesScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import ExtratoScreen from './src/screens/ExtratoScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import NewTransactionScreen from './src/screens/NewTransactionScreen';
+import PatrimonioScreen from './src/screens/PatrimonioScreen';
 import RelatoriosMetasScreen from './src/screens/RelatoriosMetasScreen';
+import { ConfigContext, salvarConfig, type Config } from './src/services/config';
+import { reagendar } from './src/services/notificacoes';
 import { supabase } from './src/services/supabase';
-import { colors } from './src/theme';
+import { colors, temaAtivo } from './src/theme';
 import type { RootStackParamList, TabParamList } from './src/types';
+import { definirOcultarValores } from './src/utils/format';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 
+const baseTheme = temaAtivo === 'claro' ? DefaultTheme : DarkTheme;
 const navTheme: Theme = {
-  ...DarkTheme,
+  ...baseTheme,
   colors: {
-    ...DarkTheme.colors,
+    ...baseTheme.colors,
     primary: colors.primary,
     background: colors.background,
     card: colors.card,
@@ -56,7 +63,7 @@ function MainTabs() {
           if (route.name === 'Novo') {
             return (
               <View style={styles.novoBtn}>
-                <Ionicons name="add" size={26} color={colors.text} />
+                <Ionicons name="add" size={26} color={colors.onAccent} />
               </View>
             );
           }
@@ -73,9 +80,45 @@ function MainTabs() {
   );
 }
 
-export default function App() {
+/** Campos que mudam o que está agendado como notificação. */
+const CAMPOS_NOTIFICACAO: (keyof Config)[] = ['notifFatura', 'notifFaturaDias', 'notifPendentes', 'notifLembreteDiario', 'notifLembreteHora'];
+
+export default function App({ configInicial }: { configInicial: Config }) {
   const [session, setSession] = useState<Session | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const [config, setConfig] = useState<Config>(configInicial);
+  // Com a biometria ativa, o app abre bloqueado (a sessão continua salva).
+  const [bloqueado, setBloqueado] = useState(configInicial.bloqueioBiometria);
+  const configRef = useRef(config);
+  configRef.current = config;
+
+  const atualizar = useCallback(async (parcial: Partial<Config>) => {
+    const nova = { ...configRef.current, ...parcial };
+    setConfig(nova);
+    await salvarConfig(nova);
+    if ('ocultarValores' in parcial) definirOcultarValores(nova.ocultarValores);
+    if (CAMPOS_NOTIFICACAO.some((k) => k in parcial)) reagendar(nova).catch(() => undefined);
+  }, []);
+  const ctx = useMemo(() => ({ config, atualizar }), [config, atualizar]);
+
+  // Bloqueia de novo ao voltar do segundo plano, depois do tempo configurado.
+  useEffect(() => {
+    let saiuEm = 0;
+    const sub = AppState.addEventListener('change', (estado) => {
+      const c = configRef.current;
+      if (estado === 'background') saiuEm = Date.now();
+      else if (estado === 'active' && saiuEm && c.bloqueioBiometria) {
+        if (Date.now() - saiuEm >= c.bloqueioMinutos * 60_000) setBloqueado(true);
+        saiuEm = 0;
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Reagenda as notificações ao entrar (os dados podem ter mudado em outro aparelho).
+  useEffect(() => {
+    if (session && !bloqueado) reagendar(configRef.current).catch(() => undefined);
+  }, [session?.user.id, bloqueado]);
 
   useEffect(() => {
     supabase.auth
@@ -90,27 +133,34 @@ export default function App() {
   }, []);
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="light" />
-      {initializing ? (
-        <View style={styles.splash}>
-          <Loading />
-        </View>
-      ) : (
-        <NavigationContainer theme={navTheme}>
-          <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
-            {session ? (
-              <>
-                <Stack.Screen name="Tabs" component={MainTabs} />
-                <Stack.Screen name="ExtratoDetalhe" component={ExtratoScreen} options={{ animation: 'slide_from_right' }} />
-              </>
-            ) : (
-              <Stack.Screen name="Login" component={LoginScreen} />
-            )}
-          </Stack.Navigator>
-        </NavigationContainer>
-      )}
-    </SafeAreaProvider>
+    <ConfigContext.Provider value={ctx}>
+      <SafeAreaProvider>
+        <StatusBar style={temaAtivo === 'claro' ? 'dark' : 'light'} />
+        {initializing ? (
+          <View style={styles.splash}>
+            <Loading />
+          </View>
+        ) : session && bloqueado && config.bloqueioBiometria ? (
+          <BloqueioScreen onDesbloquear={() => setBloqueado(false)} />
+        ) : (
+          // A key remonta as telas quando "ocultar valores" muda, para reformatar tudo.
+          <NavigationContainer key={config.ocultarValores ? 'ocultos' : 'visiveis'} theme={navTheme}>
+            <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
+              {session ? (
+                <>
+                  <Stack.Screen name="Tabs" component={MainTabs} />
+                  <Stack.Screen name="ExtratoDetalhe" component={ExtratoScreen} options={{ animation: 'slide_from_right' }} />
+                  <Stack.Screen name="Patrimonio" component={PatrimonioScreen} options={{ animation: 'slide_from_right' }} />
+                  <Stack.Screen name="Configuracoes" component={ConfiguracoesScreen} options={{ animation: 'slide_from_right' }} />
+                </>
+              ) : (
+                <Stack.Screen name="Login" component={LoginScreen} />
+              )}
+            </Stack.Navigator>
+          </NavigationContainer>
+        )}
+      </SafeAreaProvider>
+    </ConfigContext.Provider>
   );
 }
 

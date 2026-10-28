@@ -22,6 +22,7 @@ export function TransactionItem({
   const origem = item.contas?.nome ?? (item.cartoes_credito ? `💳 ${item.cartoes_credito.nome}` : '');
   const parcela = item.total_parcelas > 1 ? ` • ${item.numero_parcela}/${item.total_parcelas}` : '';
   const pendente = item.status === 'PENDENTE';
+  const quem = item.dividido ? 'Dividido' : item.pessoas?.nome;
 
   return (
     <TouchableOpacity
@@ -43,6 +44,12 @@ export function TransactionItem({
           {origem ? ` • ${origem}` : ''}
           {parcela}
         </Text>
+        {quem ? (
+          <View style={styles.quemRow}>
+            <View style={[styles.quemDot, { backgroundColor: item.dividido ? colors.primary : item.pessoas?.cor ?? colors.textMuted }]} />
+            <Text style={styles.quem}>{quem}</Text>
+          </View>
+        ) : null}
       </View>
       <View style={{ alignItems: 'flex-end' }}>
         <Text style={[styles.valor, { color: valorColor(item) }]}>
@@ -77,5 +84,8 @@ const styles = StyleSheet.create({
   desc: { color: colors.text, fontSize: 15, fontWeight: '600' },
   sub: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   valor: { fontSize: 15, fontWeight: '700' },
+  quemRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  quemDot: { width: 6, height: 6, borderRadius: 3 },
+  quem: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
   pendente: { color: colors.warning, fontSize: 11, fontWeight: '600', marginTop: 2 },
 });

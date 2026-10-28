@@ -10,8 +10,16 @@ const MESES = [
 // Dinheiro
 // ---------------------------------------------------------------------
 
+let ocultarValores = false;
+
+/** Modo privacidade: formatCurrency passa a mostrar "R$ •••••". */
+export function definirOcultarValores(ocultar: boolean) {
+  ocultarValores = ocultar;
+}
+
 /** 1234.5 -> "R$ 1.234,50" (sem depender de Intl, que varia entre engines JS). */
 export function formatCurrency(value: number, opts: { sign?: boolean } = {}): string {
+  if (ocultarValores) return 'R$ •••••';
   const n = Number.isFinite(value) ? value : 0;
   const abs = Math.abs(n);
   const [int, dec] = abs.toFixed(2).split('.');
@@ -111,12 +119,6 @@ export function nomeMes(d: Date): string {
 export function formatDateLong(iso: string): string {
   const d = parseISODate(iso);
   return `${pad(d.getDate())} de ${MESES_ABREV[d.getMonth()]} de ${d.getFullYear()}`;
-}
-
-/** "06/10" */
-export function formatDateShort(iso: string): string {
-  const d = parseISODate(iso);
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
 }
 
 /** Rótulo de cabeçalho do extrato: "Hoje", "Ontem" ou "06 de out. de 2026". */

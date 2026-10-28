@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   RefreshControl,
@@ -13,7 +12,12 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { EditarLancamentoSheet } from '../components/EditarLancamentoSheet';
+import { BancoLogo, BancoSelector, BandeiraLogo } from '../components/Logos';
+import { GastosPorPessoaCard, PessoasEditor } from '../components/Pessoas';
+import { bancoDe, detectarBanco } from '../services/bancos';
 import { TransactionItem } from '../components/TransactionItem';
 import {
   BottomSheet,
@@ -29,9 +33,10 @@ import {
   ScreenHeader,
   SectionTitle,
 } from '../components/ui';
+import { carregarPessoas, resumoPorPessoa } from '../services/finance';
 import { errorMessage, getUserId, supabase } from '../services/supabase';
 import { BANDEIRAS, CARD_COLORS, colors, radius, spacing } from '../theme';
-import type { CartaoCredito, Conta, FaturaCartao, StatusFatura, TransacaoDetalhada } from '../types';
+import type { CartaoCredito, Conta, FaturaCartao, Pessoa, StatusFatura, TransacaoDetalhada } from '../types';
 import {
   calcularCicloFatura,
   formatCurrency,
@@ -84,6 +89,14 @@ export default function CartoesScreen() {
   const [fFech, setFFech] = useState('');
   const [fVenc, setFVenc] = useState('');
   const [savingCard, setSavingCard] = useState(false);
+  const [fConjunto, setFConjunto] = useState(false);
+  /** Banco emissor escolhido (null = usar o reconhecido pelo nome). */
+  const [fBanco, setFBanco] = useState<string | null>(null);
+  const [lancamentoEdit, setLancamentoEdit] = useState<TransacaoDetalhada | null>(null);
+  /** Cartão em edição (null = criando um novo). */
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [pessoas, setPessoas] = useState<Pessoa[]>([]);
+  const [pessoasModal, setPessoasModal] = useState(false);
 
   // Modal pagar fatura
   const [payModal, setPayModal] = useState(false);
@@ -95,11 +108,13 @@ export default function CartoesScreen() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [cartoesRes, faturasRes, contasRes] = await Promise.all([
+      const [cartoesRes, faturasRes, contasRes, pessoasList] = await Promise.all([
         supabase.from('cartoes_credito').select('*').order('data_criacao'),
         supabase.from('faturas_cartao').select('*').order('data_vencimento'),
         supabase.from('contas').select('*').order('data_criacao'),
+        carregarPessoas(),
       ]);
+      setPessoas(pessoasList);
       if (cartoesRes.error) throw cartoesRes.error;
       if (faturasRes.error) throw faturasRes.error;
       if (contasRes.error) throw contasRes.error;
@@ -150,6 +165,13 @@ export default function CartoesScreen() {
   const usado = faturasCartao.filter((f) => f.status !== 'PAGA').reduce((acc, f) => acc + Math.max(0, f.valor_total), 0);
   const disponivel = cartao ? cartao.limite_total - usado : 0;
 
+  // Somatório de todos os cartões: o limite usado é a soma das faturas não pagas
+  // (inclui parcelas futuras, que já comprometem o limite).
+  const limiteTotal = cartoes.reduce((a, k) => a + k.limite_total, 0);
+  const limiteUsado = faturas.filter((f) => f.status !== 'PAGA').reduce((a, f) => a + Math.max(0, f.valor_total), 0);
+  const limiteDisponivel = limiteTotal - limiteUsado;
+  const fracaoDisponivel = limiteTotal > 0 ? limiteDisponivel / limiteTotal : 0;
+
   // Transações da fatura selecionada + parcelamentos futuros do cartão.
   const loadTransacoes = useCallback(async () => {
     if (!cartao) {
@@ -159,7 +181,7 @@ export default function CartoesScreen() {
     }
     setLoadingTx(true);
     try {
-      const select = '*, categorias(nome, icone), contas(nome), cartoes_credito(nome)';
+      const select = '*, categorias(nome, icone), contas(nome), cartoes_credito(nome), pessoas(nome, cor)';
       const [txRes, parcRes] = await Promise.all([
         faturaSelId
           ? supabase.from('transacoes').select(select).eq('fatura_id', faturaSelId).order('data_transacao', { ascending: false })
@@ -213,11 +235,28 @@ export default function CartoesScreen() {
   const abrirNovoCartao = () => {
     setFNome('');
     setFBandeira(BANDEIRAS[0]);
+    setFBanco(null);
     setFDigitos('');
     setFCor(CARD_COLORS[0]);
     setFLimite('');
     setFFech('');
     setFVenc('');
+    setFConjunto(false);
+    setEditandoId(null);
+    setCardModal(true);
+  };
+
+  const abrirEditarCartao = (k: CartaoCredito) => {
+    setFNome(k.nome);
+    setFBandeira(k.bandeira);
+    setFBanco(k.banco_codigo);
+    setFDigitos(k.ultimos_digitos);
+    setFCor(k.cor_card);
+    setFLimite(String(k.limite_total).replace('.', ','));
+    setFFech(String(k.dia_fechamento));
+    setFVenc(String(k.dia_vencimento));
+    setFConjunto(!!k.conjunto);
+    setEditandoId(k.id);
     setCardModal(true);
   };
 
@@ -233,9 +272,7 @@ export default function CartoesScreen() {
 
     setSavingCard(true);
     try {
-      const usuario_id = await getUserId();
-      const { error: err } = await supabase.from('cartoes_credito').insert({
-        usuario_id,
+      const campos = {
         nome: fNome.trim(),
         bandeira: fBandeira,
         ultimos_digitos: fDigitos,
@@ -243,16 +280,45 @@ export default function CartoesScreen() {
         limite_total: limite,
         dia_fechamento: fech,
         dia_vencimento: venc,
-      });
+        conjunto: fConjunto,
+        banco_codigo: fBanco ?? detectarBanco(fNome),
+      };
+      const { error: err } = editandoId
+        ? await supabase.from('cartoes_credito').update(campos).eq('id', editandoId)
+        : await supabase.from('cartoes_credito').insert({ ...campos, usuario_id: await getUserId() });
       if (err) throw err;
       setCardModal(false);
-      setSelectedIdx(cartoes.length);
+      if (!editandoId) setSelectedIdx(cartoes.length);
       await load();
     } catch (err) {
       Alert.alert('Erro ao salvar cartão', errorMessage(err));
     } finally {
       setSavingCard(false);
     }
+  };
+
+  const excluirCartao = () => {
+    const k = cartoes.find((c) => c.id === editandoId);
+    if (!k) return;
+    Alert.alert(
+      'Excluir cartão',
+      `Excluir o ${k.nome}? Todas as faturas e compras lançadas nele também serão apagadas. Isso não pode ser desfeito.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Excluir',
+          style: 'destructive',
+          onPress: async () => {
+            const { error: err } = await supabase.from('cartoes_credito').delete().eq('id', k.id);
+            if (err) return Alert.alert('Erro ao excluir cartão', errorMessage(err));
+            setCardModal(false);
+            setSelectedIdx(0);
+            setFaturaSelId(null);
+            load();
+          },
+        },
+      ],
+    );
   };
 
   const abrirPagamento = () => {
@@ -289,6 +355,28 @@ export default function CartoesScreen() {
   }
 
   const statusSel = faturaSel ? statusEfetivo(faturaSel) : null;
+  const resumoFatura = resumoPorPessoa(transacoes, pessoas);
+
+  const alternarConjunto = (k: CartaoCredito) => {
+    const virar = !k.conjunto;
+    Alert.alert(
+      virar ? 'Cartão compartilhado' : 'Cartão individual',
+      virar
+        ? `Nas compras do ${k.nome}, vocês indicarão quem gastou ou se foi dividido.`
+        : `O ${k.nome} deixará de separar gastos por pessoa. Lançamentos já marcados não mudam.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar',
+          onPress: async () => {
+            const { error: err } = await supabase.from('cartoes_credito').update({ conjunto: virar }).eq('id', k.id);
+            if (err) Alert.alert('Erro', errorMessage(err));
+            else load();
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -297,7 +385,7 @@ export default function CartoesScreen() {
         subtitle="Limites, faturas e parcelamentos"
         right={
           <TouchableOpacity style={styles.addBtn} onPress={abrirNovoCartao} accessibilityLabel="Adicionar cartão">
-            <Ionicons name="add" size={22} color={colors.text} />
+            <Ionicons name="add" size={22} color={colors.onAccent} />
           </TouchableOpacity>
         }
       />
@@ -323,6 +411,38 @@ export default function CartoesScreen() {
           </Card>
         ) : (
           <>
+            {/* Resumo dos limites de todos os cartões */}
+            <Card style={styles.limitesCard}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.label}>
+                  Limites • {cartoes.length} {cartoes.length === 1 ? 'cartão' : 'cartões'}
+                </Text>
+                <Text style={[styles.muted, { fontWeight: '700' }]}>{Math.round(fracaoDisponivel * 100)}% disponível</Text>
+              </View>
+              <View style={styles.limitesLinha}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.infoLabel}>Disponível</Text>
+                  <Text
+                    style={[
+                      styles.limiteDisp,
+                      { color: limiteDisponivel < 0 ? colors.danger : fracaoDisponivel < 0.2 ? colors.warning : colors.success },
+                    ]}
+                  >
+                    {formatCurrency(limiteDisponivel)}
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={styles.infoLabel}>Limite total</Text>
+                  <Text style={styles.infoValue}>{formatCurrency(limiteTotal)}</Text>
+                  <Text style={[styles.infoLabel, { marginTop: 4 }]}>Usado {formatCurrency(limiteUsado)}</Text>
+                </View>
+              </View>
+              <ProgressBar
+                progress={fracaoDisponivel}
+                color={limiteDisponivel < 0 ? colors.danger : fracaoDisponivel < 0.2 ? colors.warning : colors.success}
+              />
+            </Card>
+
             {/* Carrossel de cartões */}
             <ScrollView
               horizontal
@@ -344,6 +464,7 @@ export default function CartoesScreen() {
                       setSelectedIdx(i);
                       setFaturaSelId(null);
                     }}
+                    onLongPress={() => abrirEditarCartao(k)}
                     style={[
                       styles.creditCard,
                       { width: cardWidth, backgroundColor: k.cor_card },
@@ -351,8 +472,13 @@ export default function CartoesScreen() {
                     ]}
                   >
                     <View style={styles.rowBetween}>
-                      <Text style={styles.cardName}>{k.nome}</Text>
-                      <Text style={styles.cardBrand}>{k.bandeira}</Text>
+                      <View style={styles.cardTitulo}>
+                        {bancoDe(k) ? <BancoLogo codigo={bancoDe(k)} size={30} /> : null}
+                        <Text style={styles.cardName} numberOfLines={1}>
+                          {k.nome}
+                        </Text>
+                      </View>
+                      <BandeiraLogo bandeira={k.bandeira} width={52} />
                     </View>
                     <Text style={styles.cardDigits}>•••• •••• •••• {k.ultimos_digitos}</Text>
                     <View style={{ gap: 6 }}>
@@ -362,7 +488,7 @@ export default function CartoesScreen() {
                       </View>
                       <ProgressBar
                         progress={k.limite_total > 0 ? disp / k.limite_total : 0}
-                        color={disp / Math.max(1, k.limite_total) < 0.2 ? colors.warning : colors.text}
+                        color={disp / Math.max(1, k.limite_total) < 0.2 ? colors.warning : colors.onAccent}
                         height={6}
                       />
                     </View>
@@ -394,6 +520,23 @@ export default function CartoesScreen() {
                     ))}
                   </ScrollView>
                 ) : null}
+
+                <View style={styles.cardActions}>
+                  <TouchableOpacity style={[styles.sharedRow, { flex: 1, marginTop: 0 }]} onPress={() => alternarConjunto(cartao)}>
+                    <Ionicons
+                      name={cartao.conjunto ? 'people' : 'person-outline'}
+                      size={16}
+                      color={cartao.conjunto ? colors.primary : colors.textMuted}
+                    />
+                    <Text style={styles.sharedText}>
+                      {cartao.conjunto ? 'Cartão compartilhado' : 'Cartão individual'} • toque para alterar
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.editBtn} onPress={() => abrirEditarCartao(cartao)} accessibilityLabel="Editar cartão">
+                    <Ionicons name="create-outline" size={16} color={colors.primary} />
+                    <Text style={styles.editText}>Editar</Text>
+                  </TouchableOpacity>
+                </View>
 
                 {/* Status da fatura */}
                 <Card style={{ marginTop: spacing.md }}>
@@ -462,6 +605,17 @@ export default function CartoesScreen() {
                   )}
                 </Card>
 
+                {cartao.conjunto ? (
+                  <>
+                    <SectionTitle title="Gastos por pessoa" />
+                    <GastosPorPessoaCard
+                      resumo={resumoFatura}
+                      titulo={faturaSel ? `Fatura ${formatMesAno(faturaSel.mes_ano_referencia)}` : 'Fatura'}
+                      onGerenciar={() => setPessoasModal(true)}
+                    />
+                  </>
+                ) : null}
+
                 {/* Extrato do cartão */}
                 <SectionTitle
                   title="Extrato da fatura"
@@ -472,7 +626,7 @@ export default function CartoesScreen() {
                 ) : transacoes.length === 0 ? (
                   <EmptyState icon="receipt-outline" title="Sem lançamentos" message="Compras no cartão aparecem aqui." />
                 ) : (
-                  transacoes.map((t) => <TransactionItem key={t.id} item={t} />)
+                  transacoes.map((t) => <TransactionItem key={t.id} item={t} onPress={() => setLancamentoEdit(t)} />)
                 )}
               </>
             ) : null}
@@ -481,12 +635,21 @@ export default function CartoesScreen() {
       </ScrollView>
 
       {/* Modal: adicionar cartão */}
-      <BottomSheet visible={cardModal} title="Adicionar cartão" onClose={() => setCardModal(false)}>
+      <BottomSheet visible={cardModal} title={editandoId ? 'Editar cartão' : 'Adicionar cartão'} onClose={() => setCardModal(false)}>
         <Input label="Nome do cartão" placeholder="Ex: Nubank Platinum" value={fNome} onChangeText={setFNome} />
+        <BancoSelector label="Banco emissor" value={fBanco} onChange={setFBanco} reconhecido={detectarBanco(fNome)} />
         <Text style={styles.label}>Bandeira</Text>
         <View style={styles.chips}>
           {BANDEIRAS.map((b) => (
-            <Chip key={b} label={b} selected={fBandeira === b} onPress={() => setFBandeira(b)} />
+            <TouchableOpacity
+              key={b}
+              onPress={() => setFBandeira(b)}
+              style={[styles.bandeiraOpcao, fBandeira === b && styles.bandeiraOpcaoSel]}
+              accessibilityLabel={b}
+            >
+              <BandeiraLogo bandeira={b} width={44} />
+              <Text style={[styles.bandeiraNome, fBandeira === b && { color: colors.text }]}>{b}</Text>
+            </TouchableOpacity>
           ))}
         </View>
         <Input
@@ -523,7 +686,52 @@ export default function CartoesScreen() {
             />
           ))}
         </View>
-        <PrimaryButton title="Salvar cartão" onPress={salvarCartao} loading={savingCard} style={{ marginTop: spacing.md }} />
+        <TouchableOpacity style={[styles.sharedRow, { marginTop: 0 }]} onPress={() => setFConjunto((v) => !v)}>
+          <Ionicons name={fConjunto ? 'checkbox' : 'square-outline'} size={22} color={fConjunto ? colors.primary : colors.textMuted} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15 }}>Cartão compartilhado</Text>
+            <Text style={styles.muted}>Cada compra indica quem gastou ou se foi dividida</Text>
+          </View>
+        </TouchableOpacity>
+        {fConjunto ? (
+          <View style={{ marginTop: spacing.md }}>
+            <Text style={styles.label}>Pessoas que usam o cartão</Text>
+            <PessoasEditor pessoas={pessoas} onChange={() => carregarPessoas().then(setPessoas).catch(() => undefined)} />
+          </View>
+        ) : null}
+        {editandoId ? (
+          <Text style={[styles.muted, { marginTop: spacing.sm }]}>
+            Mudar os dias de fechamento/vencimento vale para as próximas faturas; as já criadas mantêm as datas.
+          </Text>
+        ) : null}
+        <PrimaryButton
+          title={editandoId ? 'Salvar alterações' : 'Salvar cartão'}
+          onPress={salvarCartao}
+          loading={savingCard}
+          style={{ marginTop: spacing.md }}
+        />
+        {editandoId ? (
+          <TouchableOpacity onPress={excluirCartao} style={{ alignSelf: 'center', padding: spacing.md }}>
+            <Text style={{ color: colors.danger, fontWeight: '700' }}>Excluir cartão</Text>
+          </TouchableOpacity>
+        ) : null}
+      </BottomSheet>
+
+      <EditarLancamentoSheet
+        transacao={lancamentoEdit}
+        onClose={() => setLancamentoEdit(null)}
+        onSaved={() => {
+          load();
+          loadTransacoes();
+        }}
+      />
+
+      {/* Modal: pessoas */}
+      <BottomSheet visible={pessoasModal} title="Pessoas" onClose={() => setPessoasModal(false)}>
+        <Text style={[styles.muted, { marginBottom: spacing.md }]}>
+          As mesmas pessoas valem para todas as contas e cartões compartilhados e para os investimentos.
+        </Text>
+        <PessoasEditor pessoas={pessoas} onChange={load} />
       </BottomSheet>
 
       {/* Modal: pagar fatura */}
@@ -576,13 +784,41 @@ const styles = StyleSheet.create({
     opacity: 0.75,
   },
   creditCardSelected: { opacity: 1, borderColor: 'rgba(255,255,255,0.3)' },
-  cardName: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  limitesCard: { gap: spacing.sm, marginBottom: spacing.lg },
+  limitesLinha: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.md },
+  limiteDisp: { fontSize: 26, fontWeight: '800', marginTop: 2 },
+  cardTitulo: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1, marginRight: spacing.sm },
+  bandeiraOpcao: {
+    alignItems: 'center',
+    gap: 4,
+    padding: 6,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  bandeiraOpcaoSel: { borderColor: colors.primary, backgroundColor: 'rgba(49,130,206,0.12)' },
+  bandeiraNome: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+  cardName: { color: colors.onAccent, fontSize: 18, fontWeight: '800', flexShrink: 1 },
   cardBrand: { color: 'rgba(255,255,255,0.85)', fontSize: 14, fontWeight: '800', fontStyle: 'italic' },
-  cardDigits: { color: colors.text, fontSize: 18, letterSpacing: 2, fontWeight: '600' },
+  cardDigits: { color: colors.onAccent, fontSize: 18, letterSpacing: 2, fontWeight: '600' },
   cardSmall: { color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: '600' },
   dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: spacing.md },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.input },
   dotActive: { width: 18, backgroundColor: colors.primary },
+  cardActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md },
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.input,
+  },
+  editText: { color: colors.primary, fontWeight: '700', fontSize: 12 },
+  sharedRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
+  sharedText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
   faturaChips: { gap: spacing.sm, marginTop: spacing.lg },
   label: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: spacing.sm },
   statusPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.pill },

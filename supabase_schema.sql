@@ -115,6 +115,107 @@ create table if not exists public.metas_cofrinhos (
   data_criacao  timestamptz not null default now()
 );
 
+-- Contas e cartões compartilhados: o usuário cadastra as pessoas que
+-- dividem os gastos e marca cada lançamento como de UMA pessoa
+-- (pessoa_id) ou DIVIDIDO entre todas (dividido = true, em partes iguais).
+alter table public.contas          add column if not exists conjunta boolean not null default false;
+-- Banco da conta / emissor do cartão (código COMPE com 4 dígitos, ex: '0260'),
+-- usado para exibir o logo da instituição.
+alter table public.contas          add column if not exists banco_codigo varchar(8);
+alter table public.cartoes_credito add column if not exists banco_codigo varchar(8);
+alter table public.cartoes_credito add column if not exists conjunto boolean not null default false;
+
+create table if not exists public.pessoas (
+  id            uuid primary key default gen_random_uuid(),
+  usuario_id    uuid not null references public.usuarios (id) on delete cascade,
+  nome          varchar(60) not null,
+  cor           varchar(9) not null default '#3182CE',
+  data_criacao  timestamptz not null default now()
+);
+
+alter table public.transacoes
+  add column if not exists pessoa_id uuid references public.pessoas (id) on delete set null;
+alter table public.transacoes
+  add column if not exists dividido boolean not null default false;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'transacoes_divisao_chk') then
+    alter table public.transacoes add constraint transacoes_divisao_chk
+      check (not (dividido and pessoa_id is not null));
+  end if;
+end;
+$$;
+
+-- Investimentos: cada um pertence a uma pessoa (pessoa_id) ou ao casal
+-- (pessoa_id nulo). valor_atual é o saldo de mercado informado pelo
+-- usuário; aportes/resgates ficam em movimentacoes_investimento.
+create table if not exists public.investimentos (
+  id                uuid primary key default gen_random_uuid(),
+  usuario_id        uuid not null references public.usuarios (id) on delete cascade,
+  pessoa_id         uuid references public.pessoas (id) on delete set null,
+  nome              varchar(80) not null,
+  tipo              varchar(20) not null default 'RENDA_FIXA'
+                    check (tipo in ('RENDA_FIXA', 'TESOURO', 'ACOES', 'FII', 'CRIPTO', 'PREVIDENCIA', 'OUTRO')),
+  instituicao       varchar(80) not null default '',
+  valor_atual       decimal(14, 2) not null default 0 check (valor_atual >= 0),
+  data_atualizacao  date not null default current_date,
+  data_criacao      timestamptz not null default now()
+);
+
+create table if not exists public.movimentacoes_investimento (
+  id               uuid primary key default gen_random_uuid(),
+  usuario_id       uuid not null references public.usuarios (id) on delete cascade,
+  investimento_id  uuid not null references public.investimentos (id) on delete cascade,
+  tipo             varchar(10) not null check (tipo in ('APORTE', 'RESGATE')),
+  valor            decimal(14, 2) not null check (valor > 0),
+  data             date not null default current_date,
+  conta_id         uuid references public.contas (id) on delete set null,
+  data_criacao     timestamptz not null default now()
+);
+
+-- Bens (imóveis, veículos...) de uma pessoa ou do casal. O valor líquido
+-- no patrimônio é valor_estimado - saldo_devedor (ex: financiamento).
+create table if not exists public.bens (
+  id              uuid primary key default gen_random_uuid(),
+  usuario_id      uuid not null references public.usuarios (id) on delete cascade,
+  pessoa_id       uuid references public.pessoas (id) on delete set null,
+  nome            varchar(80) not null,
+  tipo            varchar(20) not null default 'OUTRO'
+                  check (tipo in ('IMOVEL', 'VEICULO', 'TERRENO', 'EMPRESA', 'ELETRONICO', 'OUTRO')),
+  valor_estimado  decimal(14, 2) not null default 0 check (valor_estimado >= 0),
+  saldo_devedor   decimal(14, 2) not null default 0 check (saldo_devedor >= 0),
+  data_atualizacao date not null default current_date,
+  data_criacao    timestamptz not null default now()
+);
+
+-- Rendas mensais recorrentes de cada pessoa (ou do casal, pessoa_id nulo),
+-- usadas no planejamento de quanto é possível gastar por mês.
+create table if not exists public.rendas (
+  id            uuid primary key default gen_random_uuid(),
+  usuario_id    uuid not null references public.usuarios (id) on delete cascade,
+  pessoa_id     uuid references public.pessoas (id) on delete set null,
+  descricao     varchar(80) not null,
+  tipo          varchar(20) not null default 'SALARIO'
+                check (tipo in ('SALARIO', 'PRO_LABORE', 'FREELANCE', 'ALUGUEL', 'BENEFICIO', 'OUTRO')),
+  valor_mensal  decimal(14, 2) not null check (valor_mensal > 0),
+  ativa         boolean not null default true,
+  data_criacao  timestamptz not null default now()
+);
+
+-- Objetivo de patrimônio de uma pessoa (ou do casal, pessoa_id nulo).
+-- perfil indica o tipo de investimento usado para calcular o aporte necessário.
+create table if not exists public.objetivos_patrimonio (
+  id            uuid primary key default gen_random_uuid(),
+  usuario_id    uuid not null references public.usuarios (id) on delete cascade,
+  pessoa_id     uuid references public.pessoas (id) on delete cascade,
+  nome          varchar(80) not null,
+  valor_alvo    decimal(14, 2) not null check (valor_alvo > 0),
+  data_alvo     date not null,
+  perfil        varchar(20) not null default 'CDB',
+  data_criacao  timestamptz not null default now()
+);
+
 -- ---------------------------------------------------------------------
 -- 2. ÍNDICES
 -- ---------------------------------------------------------------------
@@ -130,6 +231,13 @@ create index if not exists idx_transacoes_fatura   on public.transacoes (fatura_
 create index if not exists idx_transacoes_categoria on public.transacoes (categoria_id);
 create index if not exists idx_orcamentos_usuario_mes on public.orcamentos_categorias (usuario_id, mes_ano_referencia);
 create index if not exists idx_metas_usuario       on public.metas_cofrinhos (usuario_id);
+create index if not exists idx_pessoas_usuario     on public.pessoas (usuario_id);
+create index if not exists idx_investimentos_usuario on public.investimentos (usuario_id);
+create index if not exists idx_mov_investimento    on public.movimentacoes_investimento (investimento_id, data);
+create index if not exists idx_objetivos_usuario   on public.objetivos_patrimonio (usuario_id);
+create index if not exists idx_bens_usuario        on public.bens (usuario_id);
+create index if not exists idx_rendas_usuario      on public.rendas (usuario_id);
+create index if not exists idx_transacoes_pessoa   on public.transacoes (pessoa_id);
 
 -- ---------------------------------------------------------------------
 -- 3. PERFIL AUTOMÁTICO + CATEGORIAS PADRÃO APÓS SIGNUP
@@ -459,6 +567,80 @@ begin
 end;
 $$;
 
+-- Aporte ou resgate em um investimento. Atualiza valor_atual e, se
+-- p_conta_id for informado, registra a saída/entrada na conta como
+-- TRANSFERENCIA (atribuída à pessoa do investimento quando a conta é conjunta).
+create or replace function public.movimentar_investimento(
+  p_investimento_id uuid, p_tipo text, p_valor numeric, p_conta_id uuid default null)
+returns void
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_inv public.investimentos%rowtype;
+  v_conjunta boolean;
+begin
+  if p_tipo not in ('APORTE', 'RESGATE') then
+    raise exception 'Tipo de movimentação inválido';
+  end if;
+  if p_valor is null or p_valor <= 0 then
+    raise exception 'O valor deve ser positivo';
+  end if;
+
+  select * into v_inv from public.investimentos
+   where id = p_investimento_id and usuario_id = auth.uid();
+  if not found then
+    raise exception 'Investimento não encontrado';
+  end if;
+  if p_tipo = 'RESGATE' and p_valor > v_inv.valor_atual then
+    raise exception 'Resgate maior que o saldo do investimento';
+  end if;
+
+  insert into public.movimentacoes_investimento (usuario_id, investimento_id, tipo, valor, conta_id)
+  values (auth.uid(), p_investimento_id, p_tipo, p_valor, p_conta_id);
+
+  update public.investimentos
+     set valor_atual = valor_atual + case when p_tipo = 'APORTE' then p_valor else -p_valor end,
+         data_atualizacao = current_date
+   where id = p_investimento_id;
+
+  if p_conta_id is not null then
+    select conjunta into v_conjunta from public.contas where id = p_conta_id and usuario_id = auth.uid();
+    if v_conjunta is null then
+      raise exception 'Conta não encontrada';
+    end if;
+    insert into public.transacoes
+      (usuario_id, conta_id, pessoa_id, dividido, tipo, valor, descricao, data_transacao, status)
+    values
+      (auth.uid(), p_conta_id,
+       case when v_conjunta then v_inv.pessoa_id end,
+       v_conjunta and v_inv.pessoa_id is null,
+       'TRANSFERENCIA',
+       case when p_tipo = 'APORTE' then -p_valor else p_valor end,
+       case when p_tipo = 'APORTE' then 'Aporte em ' else 'Resgate de ' end || v_inv.nome,
+       current_date, 'EFETIVADA');
+  end if;
+end;
+$$;
+
+-- Exclui a conta do usuário logado (e, em cascata, todos os dados dele).
+-- security definer: auth.users só pode ser alterada pelo dono do banco, mas
+-- a função só apaga a linha de auth.uid(), nunca a de outro usuário.
+create or replace function public.excluir_minha_conta()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Não autenticado';
+  end if;
+  delete from auth.users where id = auth.uid();
+end;
+$$;
+
 -- ---------------------------------------------------------------------
 -- 8. ROW LEVEL SECURITY
 -- ---------------------------------------------------------------------
@@ -471,6 +653,12 @@ alter table public.faturas_cartao        enable row level security;
 alter table public.transacoes            enable row level security;
 alter table public.orcamentos_categorias enable row level security;
 alter table public.metas_cofrinhos       enable row level security;
+alter table public.pessoas               enable row level security;
+alter table public.investimentos         enable row level security;
+alter table public.movimentacoes_investimento enable row level security;
+alter table public.objetivos_patrimonio  enable row level security;
+alter table public.bens                  enable row level security;
+alter table public.rendas                enable row level security;
 
 -- usuarios (a PK é o próprio auth.uid())
 drop policy if exists "usuarios_select_own" on public.usuarios;
@@ -490,7 +678,7 @@ declare
 begin
   foreach t in array array[
     'categorias', 'contas', 'cartoes_credito', 'faturas_cartao',
-    'orcamentos_categorias', 'metas_cofrinhos'
+    'orcamentos_categorias', 'metas_cofrinhos', 'pessoas'
   ] loop
     execute format('drop policy if exists "%1$s_owner_all" on public.%1$I', t);
     execute format(
@@ -503,6 +691,57 @@ $$;
 
 -- transacoes: além do dono, garante que conta/cartão/categoria referenciados
 -- também pertencem ao usuário.
+drop policy if exists "investimentos_owner_all" on public.investimentos;
+create policy "investimentos_owner_all" on public.investimentos
+  for all
+  using (auth.uid() = usuario_id)
+  with check (
+    auth.uid() = usuario_id
+    and (pessoa_id is null or exists (
+          select 1 from public.pessoas p where p.id = pessoa_id and p.usuario_id = auth.uid()))
+  );
+
+drop policy if exists "mov_investimento_owner_all" on public.movimentacoes_investimento;
+create policy "mov_investimento_owner_all" on public.movimentacoes_investimento
+  for all
+  using (auth.uid() = usuario_id)
+  with check (
+    auth.uid() = usuario_id
+    and exists (select 1 from public.investimentos i where i.id = investimento_id and i.usuario_id = auth.uid())
+    and (conta_id is null or exists (
+          select 1 from public.contas c where c.id = conta_id and c.usuario_id = auth.uid()))
+  );
+
+drop policy if exists "rendas_owner_all" on public.rendas;
+create policy "rendas_owner_all" on public.rendas
+  for all
+  using (auth.uid() = usuario_id)
+  with check (
+    auth.uid() = usuario_id
+    and (pessoa_id is null or exists (
+          select 1 from public.pessoas p where p.id = pessoa_id and p.usuario_id = auth.uid()))
+  );
+
+drop policy if exists "bens_owner_all" on public.bens;
+create policy "bens_owner_all" on public.bens
+  for all
+  using (auth.uid() = usuario_id)
+  with check (
+    auth.uid() = usuario_id
+    and (pessoa_id is null or exists (
+          select 1 from public.pessoas p where p.id = pessoa_id and p.usuario_id = auth.uid()))
+  );
+
+drop policy if exists "objetivos_owner_all" on public.objetivos_patrimonio;
+create policy "objetivos_owner_all" on public.objetivos_patrimonio
+  for all
+  using (auth.uid() = usuario_id)
+  with check (
+    auth.uid() = usuario_id
+    and (pessoa_id is null or exists (
+          select 1 from public.pessoas p where p.id = pessoa_id and p.usuario_id = auth.uid()))
+  );
+
 drop policy if exists "transacoes_owner_all" on public.transacoes;
 create policy "transacoes_owner_all" on public.transacoes
   for all
@@ -515,6 +754,8 @@ create policy "transacoes_owner_all" on public.transacoes
           select 1 from public.cartoes_credito k where k.id = cartao_id and k.usuario_id = auth.uid()))
     and (categoria_id is null or exists (
           select 1 from public.categorias g where g.id = categoria_id and g.usuario_id = auth.uid()))
+    and (pessoa_id is null or exists (
+          select 1 from public.pessoas p where p.id = pessoa_id and p.usuario_id = auth.uid()))
   );
 
 -- ---------------------------------------------------------------------
@@ -527,6 +768,9 @@ revoke execute on function public.fn_criar_categorias_padrao(uuid) from public, 
 grant execute on function public.fn_obter_ou_criar_fatura(uuid, date) to authenticated;
 grant execute on function public.pagar_fatura(uuid, uuid) to authenticated;
 grant execute on function public.aportar_meta(uuid, numeric, uuid) to authenticated;
+grant execute on function public.movimentar_investimento(uuid, text, numeric, uuid) to authenticated;
+revoke execute on function public.excluir_minha_conta() from public, anon;
+grant execute on function public.excluir_minha_conta() to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 10. CORREÇÃO DE CONTAS EXISTENTES

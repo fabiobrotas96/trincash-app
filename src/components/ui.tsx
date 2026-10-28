@@ -108,11 +108,11 @@ export function PrimaryButton({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={colors.text} />
+        <ActivityIndicator color={outline ? colors.text : colors.onAccent} />
       ) : (
         <View style={styles.buttonContent}>
-          {icon ? <Ionicons name={icon} size={18} color={colors.text} /> : null}
-          <Text style={styles.buttonText}>{title}</Text>
+          {icon ? <Ionicons name={icon} size={18} color={outline ? colors.text : colors.onAccent} /> : null}
+          <Text style={[styles.buttonText, outline && { color: colors.text }]}>{title}</Text>
         </View>
       )}
     </TouchableOpacity>
@@ -156,7 +156,7 @@ export function Chip({
       onPress={onPress}
       style={[styles.chip, selected && { backgroundColor: color, borderColor: color }]}
     >
-      <Text style={[styles.chipText, selected && { color: colors.text }]}>{label}</Text>
+      <Text style={[styles.chipText, selected && { color: colors.onAccent }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -182,7 +182,7 @@ export function SegmentedControl<T extends string>({
             onPress={() => onChange(opt.value)}
             style={[styles.segment, active && { backgroundColor: colorFor?.(opt.value) ?? colors.primary }]}
           >
-            <Text style={[styles.segmentText, active && { color: colors.text }]}>{opt.label}</Text>
+            <Text style={[styles.segmentText, active && { color: colors.onAccent }]}>{opt.label}</Text>
           </TouchableOpacity>
         );
       })}
@@ -318,7 +318,7 @@ export const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   buttonContent: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  buttonText: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  buttonText: { color: colors.onAccent, fontSize: 16, fontWeight: '700' },
   label: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: 6 },
   input: {
     backgroundColor: colors.border,

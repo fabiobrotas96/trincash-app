@@ -1,4 +1,4 @@
-import type { Categoria, OrcamentoCategoria } from '../types';
+import type { Categoria, OrcamentoCategoria, Pessoa, Transacao } from '../types';
 import { daysInMonth, endOfMonth, mesAnoReferencia, startOfMonth, toISODate, toNumber, today } from '../utils/format';
 import { supabase } from './supabase';
 
@@ -95,4 +95,62 @@ export async function carregarStatusOrcamentos(): Promise<StatusOrcamento[]> {
       };
     })
     .sort((a, b) => b.percentual - a.percentual);
+}
+
+// ---------------------------------------------------------------------
+// Gastos compartilhados por pessoa
+// ---------------------------------------------------------------------
+
+export interface GastoPessoa {
+  pessoa: Pick<Pessoa, 'id' | 'nome' | 'cor'>;
+  /** Gastos feitos só por essa pessoa. */
+  individual: number;
+  /** Parte dela nos gastos divididos (partes iguais). */
+  parteDividida: number;
+  total: number;
+}
+
+export interface ResumoPessoas {
+  porPessoa: GastoPessoa[];
+  totalDividido: number;
+  /** Despesas sem pessoa nem divisão (lançadas antes de a conta virar compartilhada). */
+  semPessoa: number;
+  total: number;
+}
+
+/** Soma as despesas por pessoa; gastos divididos entram em partes iguais para cada uma. */
+export function resumoPorPessoa(
+  transacoes: Pick<Transacao, 'tipo' | 'valor' | 'pessoa_id' | 'dividido'>[],
+  pessoas: Pick<Pessoa, 'id' | 'nome' | 'cor'>[],
+): ResumoPessoas {
+  const individual = new Map<string, number>();
+  let totalDividido = 0;
+  let semPessoa = 0;
+  for (const t of transacoes) {
+    if (t.tipo !== 'DESPESA') continue;
+    const v = Math.abs(toNumber(t.valor));
+    if (t.dividido) totalDividido += v;
+    else if (t.pessoa_id && pessoas.some((p) => p.id === t.pessoa_id))
+      individual.set(t.pessoa_id, (individual.get(t.pessoa_id) ?? 0) + v);
+    else semPessoa += v;
+  }
+  const parte = pessoas.length ? totalDividido / pessoas.length : 0;
+  const porPessoa = pessoas.map((p) => {
+    const ind = individual.get(p.id) ?? 0;
+    return { pessoa: p, individual: ind, parteDividida: parte, total: ind + parte };
+  });
+  // Sem pessoas cadastradas, o dividido não tem para quem ir: conta como sem pessoa.
+  if (!pessoas.length) semPessoa += totalDividido;
+  return {
+    porPessoa,
+    totalDividido,
+    semPessoa,
+    total: porPessoa.reduce((a, p) => a + p.total, 0) + semPessoa,
+  };
+}
+
+export async function carregarPessoas(): Promise<Pessoa[]> {
+  const { data, error } = await supabase.from('pessoas').select('*').order('data_criacao');
+  if (error) throw error;
+  return (data ?? []) as Pessoa[];
 }

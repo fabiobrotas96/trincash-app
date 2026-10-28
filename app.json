@@ -5,9 +5,12 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Permitir que o Trincash use o Face ID para desbloquear o app."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +26,14 @@
     "backgroundColor": "#0A0A0A",
     "plugins": [
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      "expo-notifications",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Permitir que o Trincash use o Face ID para desbloquear o app."
+        }
+      ]
     ]
   }
 }

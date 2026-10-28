@@ -32,6 +32,10 @@ export interface Conta {
   nome: string;
   saldo: number;
   tipo: TipoConta;
+  /** Conta compartilhada: lançamentos indicam a pessoa ou se foram divididos. */
+  conjunta: boolean;
+  /** Código COMPE (4 dígitos) do banco, para o logo. */
+  banco_codigo: string | null;
   data_criacao: string;
 }
 
@@ -45,6 +49,10 @@ export interface CartaoCredito {
   limite_total: number;
   dia_fechamento: number;
   dia_vencimento: number;
+  /** Cartão compartilhado: lançamentos indicam a pessoa ou se foram divididos. */
+  conjunto: boolean;
+  /** Código COMPE (4 dígitos) do banco emissor, para o logo. */
+  banco_codigo: string | null;
   data_criacao: string;
 }
 
@@ -77,6 +85,10 @@ export interface Transacao {
   numero_parcela: number;
   total_parcelas: number;
   recorrente: boolean;
+  /** Pessoa que fez o gasto (contas/cartões compartilhados). */
+  pessoa_id: string | null;
+  /** Dividido igualmente entre todas as pessoas. */
+  dividido: boolean;
   data_criacao: string;
 }
 
@@ -85,11 +97,92 @@ export interface TransacaoDetalhada extends Transacao {
   categorias: Pick<Categoria, 'nome' | 'icone'> | null;
   contas: Pick<Conta, 'nome'> | null;
   cartoes_credito: Pick<CartaoCredito, 'nome'> | null;
+  pessoas?: Pick<Pessoa, 'nome' | 'cor'> | null;
 }
 
-export type NovaTransacao = Omit<Transacao, 'id' | 'data_criacao' | 'fatura_id'> & {
+export type NovaTransacao = Omit<Transacao, 'id' | 'data_criacao' | 'fatura_id' | 'pessoa_id' | 'dividido'> & {
   fatura_id?: string | null;
+  pessoa_id?: string | null;
+  dividido?: boolean;
 };
+
+/** Pessoa que divide contas/cartões e investe (ex: Fábio, Ana). */
+export interface Pessoa {
+  id: string;
+  usuario_id: string;
+  nome: string;
+  cor: string;
+  data_criacao: string;
+}
+
+export type TipoInvestimento = 'RENDA_FIXA' | 'TESOURO' | 'ACOES' | 'FII' | 'CRIPTO' | 'PREVIDENCIA' | 'OUTRO';
+
+export interface Investimento {
+  id: string;
+  usuario_id: string;
+  /** null = do casal/conjunto */
+  pessoa_id: string | null;
+  nome: string;
+  tipo: TipoInvestimento;
+  instituicao: string;
+  valor_atual: number;
+  data_atualizacao: string;
+  data_criacao: string;
+}
+
+export interface MovimentacaoInvestimento {
+  id: string;
+  usuario_id: string;
+  investimento_id: string;
+  tipo: 'APORTE' | 'RESGATE';
+  valor: number;
+  data: string;
+  conta_id: string | null;
+  data_criacao: string;
+}
+
+export type TipoBem = 'IMOVEL' | 'VEICULO' | 'TERRENO' | 'EMPRESA' | 'ELETRONICO' | 'OUTRO';
+
+export interface Bem {
+  id: string;
+  usuario_id: string;
+  /** null = do casal/conjunto */
+  pessoa_id: string | null;
+  nome: string;
+  tipo: TipoBem;
+  valor_estimado: number;
+  /** Ex: saldo de financiamento; o bem entra no patrimônio pelo valor líquido. */
+  saldo_devedor: number;
+  data_atualizacao: string;
+  data_criacao: string;
+}
+
+export type TipoRenda = 'SALARIO' | 'PRO_LABORE' | 'FREELANCE' | 'ALUGUEL' | 'BENEFICIO' | 'OUTRO';
+
+export interface Renda {
+  id: string;
+  usuario_id: string;
+  /** null = renda do casal */
+  pessoa_id: string | null;
+  descricao: string;
+  tipo: TipoRenda;
+  valor_mensal: number;
+  ativa: boolean;
+  data_criacao: string;
+}
+
+export interface ObjetivoPatrimonio {
+  id: string;
+  usuario_id: string;
+  /** null = do casal/conjunto */
+  pessoa_id: string | null;
+  nome: string;
+  valor_alvo: number;
+  data_alvo: string;
+  /** PerfilId do simulador usado no cálculo do aporte necessário. */
+  perfil: string;
+  data_criacao: string;
+}
 
 export interface OrcamentoCategoria {
   id: string;
@@ -132,6 +225,8 @@ export type RootStackParamList = {
   Login: undefined;
   Tabs: NavigatorScreenParams<TabParamList> | undefined;
   ExtratoDetalhe: ExtratoParams | undefined;
+  Patrimonio: undefined;
+  Configuracoes: undefined;
 };
 
 declare global {

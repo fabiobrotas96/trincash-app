@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -12,11 +11,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { QuemSelector, type Quem } from '../components/Pessoas';
 import { Chip, ErrorBanner, Input, Loading, PrimaryButton, SegmentedControl } from '../components/ui';
+import { carregarPessoas } from '../services/finance';
 import { errorMessage, getUserId, supabase } from '../services/supabase';
 import { colors, radius, spacing } from '../theme';
-import type { CartaoCredito, Categoria, Conta, NovaTransacao, TabParamList, TipoTransacao } from '../types';
+import type { CartaoCredito, Categoria, Conta, NovaTransacao, Pessoa, TabParamList, TipoTransacao } from '../types';
 import {
   addDays,
   addMonths,
@@ -51,6 +53,7 @@ export default function NewTransactionScreen() {
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [contas, setContas] = useState<Conta[]>([]);
   const [cartoes, setCartoes] = useState<CartaoCredito[]>([]);
+  const [pessoas, setPessoas] = useState<Pessoa[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -66,6 +69,7 @@ export default function NewTransactionScreen() {
   const [dataTexto, setDataTexto] = useState('');
   const [repeticao, setRepeticao] = useState<Repeticao>('nao');
   const [parcelas, setParcelas] = useState(2);
+  const [quem, setQuem] = useState<Quem>({ pessoaId: null, dividido: false });
 
   const valor = digitsToAmount(digits);
 
@@ -80,6 +84,7 @@ export default function NewTransactionScreen() {
     setDataTexto('');
     setRepeticao('nao');
     setParcelas(2);
+    setQuem({ pessoaId: null, dividido: false });
   }, []);
 
   // Tipo pré-selecionado vindo das ações rápidas do Dashboard.
@@ -92,10 +97,11 @@ export default function NewTransactionScreen() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [catRes, contasRes, cartoesRes] = await Promise.all([
+      const [catRes, contasRes, cartoesRes, pessoasList] = await Promise.all([
         supabase.from('categorias').select('*').order('nome'),
         supabase.from('contas').select('*').order('data_criacao'),
         supabase.from('cartoes_credito').select('*').order('data_criacao'),
+        carregarPessoas(),
       ]);
       if (catRes.error) throw catRes.error;
       if (contasRes.error) throw contasRes.error;
@@ -103,6 +109,7 @@ export default function NewTransactionScreen() {
       setCategorias((catRes.data ?? []) as Categoria[]);
       setContas((contasRes.data ?? []) as Conta[]);
       setCartoes((cartoesRes.data ?? []) as CartaoCredito[]);
+      setPessoas(pessoasList);
     } catch (err) {
       setLoadError(errorMessage(err));
     } finally {
@@ -137,6 +144,14 @@ export default function NewTransactionScreen() {
     [categorias, tipo],
   );
 
+  // Conta conjunta ou cartão compartilhado: o lançamento indica quem gastou.
+  const origemCompartilhada =
+    tipo !== 'TRANSFERENCIA' &&
+    !!origem &&
+    (origem.kind === 'conta'
+      ? !!contas.find((c) => c.id === origem.id)?.conjunta
+      : !!cartoes.find((c) => c.id === origem.id)?.conjunto);
+
   const dataSelecionada = (): Date | null => {
     if (dataOpcao === 'hoje') return today();
     if (dataOpcao === 'ontem') return addDays(today(), -1);
@@ -159,6 +174,8 @@ export default function NewTransactionScreen() {
       numero_parcela: 1,
       total_parcelas: 1,
       recorrente: repeticao === 'mensal',
+      pessoa_id: origemCompartilhada && !quem.dividido ? quem.pessoaId : null,
+      dividido: origemCompartilhada && quem.dividido,
     };
     const statusPara = (d: Date, cartao: boolean) => (cartao || d <= hoje ? 'EFETIVADA' : 'PENDENTE') as NovaTransacao['status'];
 
@@ -237,6 +254,9 @@ export default function NewTransactionScreen() {
       }
     } else if (!categoriaId) {
       Alert.alert('Atenção', 'Escolha uma categoria.');
+      return;
+    } else if (origemCompartilhada && pessoas.length > 0 && !quem.pessoaId && !quem.dividido) {
+      Alert.alert('Atenção', 'Indique quem fez este lançamento ou marque como Dividido.');
       return;
     }
     const data = dataSelecionada();
@@ -340,6 +360,24 @@ export default function NewTransactionScreen() {
                 {categoriasDoTipo.length === 0 ? <Text style={styles.muted}>Nenhuma categoria encontrada.</Text> : null}
               </View>
             </>
+          ) : null}
+
+          {origemCompartilhada ? (
+            <View style={styles.quemBox}>
+              <Text style={styles.label}>Quem? • {origemLabel()} (compartilhado)</Text>
+              {pessoas.length > 0 ? (
+                <QuemSelector pessoas={pessoas} value={quem} onChange={setQuem} />
+              ) : (
+                <Text style={[styles.muted, { marginBottom: spacing.md }]}>
+                  Cadastre as pessoas no extrato da conta ou em Cartões para separar os gastos.
+                </Text>
+              )}
+              {quem.dividido && pessoas.length > 0 && valor > 0 ? (
+                <Text style={[styles.muted, { marginTop: -spacing.sm, marginBottom: spacing.md }]}>
+                  {formatCurrency(valor / pessoas.length)} para cada uma das {pessoas.length} pessoas
+                </Text>
+              ) : null}
+            </View>
           ) : null}
 
           <Input
@@ -485,6 +523,7 @@ const styles = StyleSheet.create({
   catIcon: { fontSize: 24 },
   catName: { color: colors.textSecondary, fontSize: 12, fontWeight: '600', paddingHorizontal: 4 },
   muted: { color: colors.textMuted, fontSize: 12 },
+  quemBox: { marginBottom: spacing.sm },
   detailsToggle: {
     flexDirection: 'row',
     alignItems: 'center',
