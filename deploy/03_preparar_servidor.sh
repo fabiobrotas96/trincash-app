@@ -48,7 +48,8 @@ $ENDERECO {
 	# o index.html nunca, para as atualizações aparecerem na hora.
 	@estaticos path /_expo/* /assets/*
 	header @estaticos Cache-Control "public, max-age=31536000, immutable"
-	header /index.html Cache-Control "no-cache"
+	@pagina not path /_expo/* /assets/*
+	header @pagina Cache-Control "no-cache"
 
 	header {
 		X-Content-Type-Options nosniff

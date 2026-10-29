@@ -37,3 +37,11 @@ src/utils/format.ts          Moeda, datas em pt-BR e ciclo de fatura
 - Compras no cartão são vinculadas automaticamente à fatura do ciclo (compras a partir do dia de fechamento vão para a próxima fatura); o `valor_total` da fatura é recalculado por trigger.
 - Transferências, pagamentos de fatura e aportes em metas são registrados como `TRANSFERENCIA`, para não duplicar despesas nos relatórios.
 - Lançamentos recorrentes geram 12 ocorrências mensais (as futuras ficam `PENDENTE`); parcelamentos no cartão geram de 2 a 12 parcelas.
+
+## Publicação web (Oracle)
+
+O app web fica em **http://147.15.63.192** (Caddy servindo arquivos estáticos; banco e login no Supabase).
+
+- Publicar uma atualização (no Codespace): `bash deploy/04_publicar.sh ubuntu@147.15.63.192`
+- Servidor novo: `deploy/00_limpar_servidor.sh` (limpeza + swap) e depois `deploy/03_preparar_servidor.sh [dominio]`
+- O acesso SSH usa a chave `~/.ssh/trincash_oracle` do Codespace (não fica no repositório).
