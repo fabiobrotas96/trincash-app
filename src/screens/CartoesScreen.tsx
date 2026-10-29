@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -68,7 +69,10 @@ function statusEfetivo(f: FaturaCartao): StatusFatura {
 export default function CartoesScreen() {
   const isFocused = useIsFocused();
   const { width } = useWindowDimensions();
-  const cardWidth = width - spacing.lg * 2;
+  // Em telas largas (computador) o cartão não estica além de 400 px.
+  const cardWidth = Math.min(width - spacing.lg * 2, 400);
+  const passoCarrossel = cardWidth + spacing.md;
+  const carrosselRef = useRef<ComponentRef<typeof ScrollView>>(null);
 
   const [cartoes, setCartoes] = useState<CartaoCredito[]>([]);
   const [faturas, setFaturas] = useState<FaturaCartao[]>([]);
@@ -242,12 +246,27 @@ export default function CartoesScreen() {
   const maxPrevisao = Math.max(1, ...previsao.map((p) => p.total));
 
   const onCarouselScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const idx = Math.round(e.nativeEvent.contentOffset.x / (cardWidth + spacing.md));
+    const idx = Math.round(e.nativeEvent.contentOffset.x / passoCarrossel);
     if (idx !== selectedIdx && idx >= 0 && idx < cartoes.length) {
       setSelectedIdx(idx);
       setFaturaSelId(null);
     }
   };
+
+  /** Seleciona e rola até o cartão (setas, pontinhos e clique). */
+  const irParaCartao = (idx: number) => {
+    const alvo = Math.max(0, Math.min(idx, cartoes.length - 1));
+    if (alvo !== selectedIdx) {
+      setSelectedIdx(alvo);
+      setFaturaSelId(null);
+    }
+    carrosselRef.current?.scrollTo({ x: alvo * passoCarrossel, animated: true });
+  };
+
+  // Ao cadastrar um cartão (ou recarregar a lista), mostra o selecionado.
+  useEffect(() => {
+    carrosselRef.current?.scrollTo({ x: selectedIdx * passoCarrossel, animated: false });
+  }, [cartoes.length]);
 
   const abrirNovoCartao = () => {
     setFNome('');
@@ -481,11 +500,15 @@ export default function CartoesScreen() {
 
             {/* Carrossel de cartões */}
             <ScrollView
+              ref={carrosselRef}
               horizontal
               showsHorizontalScrollIndicator={false}
-              snapToInterval={cardWidth + spacing.md}
+              snapToInterval={passoCarrossel}
               decelerationRate="fast"
               onMomentumScrollEnd={onCarouselScroll}
+              // No navegador não há "fim do arrasto": acompanha a rolagem (trackpad/roda).
+              onScroll={Platform.OS === 'web' ? onCarouselScroll : undefined}
+              scrollEventThrottle={32}
               contentContainerStyle={{ gap: spacing.md }}
             >
               {cartoes.map((k, i) => {
@@ -496,10 +519,7 @@ export default function CartoesScreen() {
                   <TouchableOpacity
                     key={k.id}
                     activeOpacity={0.9}
-                    onPress={() => {
-                      setSelectedIdx(i);
-                      setFaturaSelId(null);
-                    }}
+                    onPress={() => irParaCartao(i)}
                     onLongPress={() => abrirEditarCartao(k)}
                     style={[
                       styles.creditCard,
@@ -533,10 +553,30 @@ export default function CartoesScreen() {
               })}
             </ScrollView>
             {cartoes.length > 1 ? (
-              <View style={styles.dots}>
-                {cartoes.map((k, i) => (
-                  <View key={k.id} style={[styles.dot, i === selectedIdx && styles.dotActive]} />
-                ))}
+              <View style={styles.navegacao}>
+                <TouchableOpacity
+                  style={[styles.seta, selectedIdx === 0 && styles.setaInativa]}
+                  onPress={() => irParaCartao(selectedIdx - 1)}
+                  disabled={selectedIdx === 0}
+                  accessibilityLabel="Cartão anterior"
+                >
+                  <Ionicons name="chevron-back" size={18} color={colors.text} />
+                </TouchableOpacity>
+                <View style={styles.dots}>
+                  {cartoes.map((k, i) => (
+                    <TouchableOpacity key={k.id} onPress={() => irParaCartao(i)} hitSlop={6} accessibilityLabel={k.nome}>
+                      <View style={[styles.dot, i === selectedIdx && styles.dotActive]} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity
+                  style={[styles.seta, selectedIdx === cartoes.length - 1 && styles.setaInativa]}
+                  onPress={() => irParaCartao(selectedIdx + 1)}
+                  disabled={selectedIdx === cartoes.length - 1}
+                  accessibilityLabel="Próximo cartão"
+                >
+                  <Ionicons name="chevron-forward" size={18} color={colors.text} />
+                </TouchableOpacity>
               </View>
             ) : null}
 
@@ -842,9 +882,21 @@ const styles = StyleSheet.create({
   cardBrand: { color: 'rgba(255,255,255,0.85)', fontSize: 14, fontWeight: '800', fontStyle: 'italic' },
   cardDigits: { color: colors.onAccent, fontSize: 18, letterSpacing: 2, fontWeight: '600' },
   cardSmall: { color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: '600' },
-  dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: spacing.md },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.input },
-  dotActive: { width: 18, backgroundColor: colors.primary },
+  navegacao: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.lg, marginTop: spacing.md },
+  seta: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  setaInativa: { opacity: 0.3 },
+  dots: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.input },
+  dotActive: { width: 20, backgroundColor: colors.primary },
   cardActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md },
   editBtn: {
     flexDirection: 'row',
