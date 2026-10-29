@@ -40,8 +40,8 @@ src/utils/format.ts          Moeda, datas em pt-BR e ciclo de fatura
 
 ## Publicação web (Oracle)
 
-O app web fica em **http://147.15.63.192** (Caddy servindo arquivos estáticos; banco e login no Supabase).
+O app web fica em **http://147.15.48.165** (Ubuntu 24.04; Caddy servindo os arquivos estáticos; banco e login no Supabase).
 
-- Publicar uma atualização (no Codespace): `bash deploy/04_publicar.sh ubuntu@147.15.63.192`
-- Servidor novo: `deploy/00_limpar_servidor.sh` (limpeza + swap) e depois `deploy/03_preparar_servidor.sh [dominio]`
+- Publicar uma atualização (no Codespace): `bash deploy/publicar.sh ubuntu@147.15.48.165`
+- Servidor novo: rode `deploy/preparar_servidor.sh [dominio]` nele (limpeza, swap, Caddy e firewall). Sem domínio, o app fica em `http://IP`; com domínio, o Caddy gera o HTTPS.
 - O acesso SSH usa a chave `~/.ssh/trincash_oracle` do Codespace (não fica no repositório).

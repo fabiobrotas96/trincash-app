@@ -181,8 +181,6 @@ export default function CartoesScreen() {
 
   const faturaSel = faturasCartao.find((f) => f.id === faturaSelId) ?? null;
 
-  const usado = faturasCartao.filter((f) => f.status !== 'PAGA').reduce((acc, f) => acc + Math.max(0, f.valor_total), 0);
-  const disponivel = cartao ? cartao.limite_total - usado : 0;
 
   // Somatório de todos os cartões: o limite usado é a soma das faturas não pagas
   // (inclui parcelas futuras, que já comprometem o limite).
