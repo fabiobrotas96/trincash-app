@@ -2,6 +2,7 @@
 # =====================================================================
 # TRINCASH — Preparar o servidor Oracle (Ubuntu) para servir o app web
 # Rode NO SERVIDOR uma única vez:  bash 03_preparar_servidor.sh [dominio]
+# (Testado para Ubuntu 20.04 da Oracle. Passo a passo: deploy/PASSO_A_PASSO.md)
 #
 #   Sem domínio:  o app fica em http://IP-DO-SERVIDOR (sem HTTPS)
 #   Com domínio:  o Caddy emite o certificado HTTPS sozinho (Let's Encrypt).
