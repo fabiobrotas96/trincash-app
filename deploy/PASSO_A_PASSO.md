@@ -67,6 +67,17 @@ Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
 
 Cole a linha mostrada no painel. Depois você entra com `ssh ubuntu@IP-NOVO`.
 
+## Passo 2.1 — Liberar o acesso do Claude *(você, no terminal conectado à instância nova)*
+
+A instância nova (`147.15.48.165`) recusou a chave do Claude (`Permission denied`).
+Entre nela pelo PowerShell (`ssh ubuntu@147.15.48.165`) e rode:
+
+```bash
+echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEGy4Rq/xRxlFieuoHblzEN/CdQ9sG9nI/Yol8WmTMHT trincash-codespace' >> ~/.ssh/authorized_keys && echo CHAVE_ADICIONADA
+```
+
+Deve aparecer `CHAVE_ADICIONADA`. Não envie a sua chave privada (secret) — não é necessária.
+
 ## Passo 3 — Preparar e publicar *(o Claude faz pelo SSH)*
 
 Limpeza + swap, instalação do Caddy, firewall e envio do app — os mesmos scripts de `deploy/`.
