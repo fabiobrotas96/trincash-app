@@ -27,7 +27,7 @@ Veja a coluna *Public IP*:
 - **Networking**: a **mesma VCN e subnet** da instância atual (assim a porta 80 já vem liberada)
   e **Assign a public IPv4 address** marcado
 - **Add SSH keys** → *Paste public keys* → cole **as duas** chaves, uma por linha:
-  - a sua (a mesma que você usa hoje no PowerShell)
+  - a sua (a mesma que você usa hoje no PowerShell — veja abaixo como achar)
   - a do Claude:
     ```
     ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEGy4Rq/xRxlFieuoHblzEN/CdQ9sG9nI/Yol8WmTMHT trincash-codespace
@@ -35,6 +35,37 @@ Veja a coluna *Public IP*:
 - **Create**. Quando ficar *Running*, me mande o **IP público** novo.
 
 > No plano gratuito cabem duas instâncias Micro, então dá para ter a nova e a antiga ao mesmo tempo.
+
+### Sua chave SSH (no PowerShell do seu computador)
+
+Não precisa gerar outra: a chave **pública** que você já usa serve para a instância nova.
+A pública pode ser colada no painel sem problema; a **privada** nunca sai do seu computador.
+
+**a) Já tem a chave no computador** (é o caso se você entra com `ssh ubuntu@147.15.63.192`):
+
+```powershell
+Get-Content $env:USERPROFILE\.ssh\*.pub
+```
+
+Copie a linha que começa com `ssh-ed25519` ou `ssh-rsa` e cole no painel.
+
+**b) Você entra usando um arquivo `.key` baixado da Oracle** (`ssh -i caminho\arquivo.key ...`):
+gere a parte pública a partir dele:
+
+```powershell
+ssh-keygen -y -f "C:\caminho\do\arquivo.key"
+```
+
+Copie a linha que aparecer e cole no painel. Continue usando o mesmo arquivo `.key` para entrar.
+
+**c) Não acha nenhuma das duas** — aí sim, gere uma nova (aperte Enter nas perguntas):
+
+```powershell
+ssh-keygen -t ed25519
+Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
+```
+
+Cole a linha mostrada no painel. Depois você entra com `ssh ubuntu@IP-NOVO`.
 
 ## Passo 3 — Preparar e publicar *(o Claude faz pelo SSH)*
 
