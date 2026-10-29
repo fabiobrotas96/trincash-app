@@ -1,16 +1,19 @@
 # Trincash web — o que falta fazer manualmente
 
-O app já está publicado na instância nova (Ubuntu 24.04): **http://147.15.48.165**
-e o Supabase já aponta para esse endereço.
+O app agora abre com HTTPS (sem o aviso "Não seguro") em:
 
-## Apagar a instância antiga *(painel da Oracle)*
+**https://147-15-48-165.sslip.io**
 
-Depois de testar o app no endereço novo (login, uma conta, um cartão):
+O endereço antigo `http://147.15.48.165` redireciona para ele automaticamente.
 
-**Compute → Instances →** instância antiga (IP `147.15.63.192`, Ubuntu 20.04)
-**→ More actions → Terminate**, marcando *Permanently delete the attached boot volume*.
+## Supabase: trocar para o endereço seguro *(painel do Supabase)*
 
-No Supabase (**Authentication → URL Configuration → Redirect URLs**) pode remover
-o endereço antigo `http://147.15.63.192/**`, se ainda estiver lá.
+Em **Authentication → URL Configuration**:
+
+- **Site URL**: `https://147-15-48-165.sslip.io`
+- **Redirect URLs**: adicione `https://147-15-48-165.sslip.io/**`
+  (pode remover os endereços `http://...` antigos)
+
+Sem isso, os links de confirmação de e-mail e de troca de senha abrem o endereço sem HTTPS.
 
 Depois de feito, este arquivo pode ser apagado.

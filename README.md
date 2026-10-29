@@ -40,8 +40,8 @@ src/utils/format.ts          Moeda, datas em pt-BR e ciclo de fatura
 
 ## Publicação web (Oracle)
 
-O app web fica em **http://147.15.48.165** (Ubuntu 24.04; Caddy servindo os arquivos estáticos; banco e login no Supabase).
+O app web fica em **https://147-15-48-165.sslip.io** (Ubuntu 24.04; Caddy servindo os arquivos estáticos com HTTPS da Let's Encrypt; banco e login no Supabase). O nome vem do [sslip.io](https://sslip.io), que aponta `147-15-48-165.sslip.io` para o IP `147.15.48.165` sem precisar de domínio próprio.
 
 - Publicar uma atualização (no Codespace): `bash deploy/publicar.sh ubuntu@147.15.48.165`
-- Servidor novo: rode `deploy/preparar_servidor.sh [dominio]` nele (limpeza, swap, Caddy e firewall). Sem domínio, o app fica em `http://IP`; com domínio, o Caddy gera o HTTPS.
+- Servidor novo: rode `deploy/preparar_servidor.sh 147-15-48-165.sslip.io` nele (limpeza, swap, Caddy, HTTPS e firewall). Troque pelo IP do servidor (`1-2-3-4.sslip.io`) ou por um domínio próprio.
 - O acesso SSH usa a chave `~/.ssh/trincash_oracle` do Codespace (não fica no repositório).

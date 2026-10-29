@@ -5,8 +5,11 @@
 # (Testado no Ubuntu 20.04 e 24.04 Minimal da Oracle.)
 #
 #   Sem domínio:  o app fica em http://IP-DO-SERVIDOR (sem HTTPS)
-#   Com domínio:  o Caddy emite o certificado HTTPS sozinho (Let's Encrypt).
+#   Com domínio:  o Caddy emite o certificado HTTPS sozinho (Let's Encrypt)
+#                 e redireciona http://IP para https://dominio.
 #                 O domínio precisa apontar (registro A) para o IP antes.
+#                 Sem domínio próprio, use o sslip.io: para o IP 1.2.3.4,
+#                 o nome 1-2-3-4.sslip.io já aponta para ele (grátis, sem conta).
 #
 # 1. Limpa o que o app não usa: Docker, LXD, ModemManager, udisks2.
 #    Mantém SSH, atualizações de segurança, Oracle Cloud Agent (e snapd)
@@ -103,6 +106,9 @@ $ENDERECO {
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options DENY
+		# Com HTTPS, o navegador passa a usar sempre https neste endereço
+		# (ignorado quando o site é servido só por http).
+		Strict-Transport-Security "max-age=31536000"
 	}
 
 	# App de página única: qualquer caminho cai no index.html
@@ -110,6 +116,16 @@ $ENDERECO {
 	file_server
 }
 CADDY
+if [ -n "$DOMINIO" ]; then
+  # Quem acessar pelo IP (http://IP) é levado para o endereço com HTTPS.
+  sudo tee -a /etc/caddy/Caddyfile >/dev/null <<CADDY
+
+:80 {
+	redir https://$DOMINIO{uri} permanent
+}
+CADDY
+fi
+sudo caddy validate --config /etc/caddy/Caddyfile >/dev/null
 sudo systemctl enable --now caddy
 sudo systemctl reload caddy
 
