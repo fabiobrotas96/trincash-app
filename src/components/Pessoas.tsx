@@ -142,11 +142,12 @@ export function QuemSelector({
     <View style={styles.chips}>
       {pessoas.map((p) => {
         const sel = !value.dividido && value.pessoaId === p.id;
+        // Tocar de novo na pessoa selecionada desmarca (lançamento sem pessoa).
         return (
           <TouchableOpacity
             key={p.id}
             style={[styles.quemChip, sel && { backgroundColor: p.cor, borderColor: p.cor }]}
-            onPress={() => onChange({ pessoaId: p.id, dividido: false })}
+            onPress={() => onChange({ pessoaId: sel ? null : p.id, dividido: false })}
           >
             <View style={[styles.dot, { backgroundColor: sel ? colors.onAccent : p.cor }]} />
             <Text style={[styles.quemText, sel && { color: colors.onAccent }]}>{p.nome}</Text>
@@ -155,7 +156,7 @@ export function QuemSelector({
       })}
       <TouchableOpacity
         style={[styles.quemChip, value.dividido && { backgroundColor: colors.primary, borderColor: colors.primary }]}
-        onPress={() => onChange({ pessoaId: null, dividido: true })}
+        onPress={() => onChange({ pessoaId: null, dividido: !value.dividido })}
       >
         <Ionicons name="git-compare-outline" size={14} color={value.dividido ? colors.onAccent : colors.textSecondary} />
         <Text style={[styles.quemText, value.dividido && { color: colors.onAccent }]}>Dividido</Text>

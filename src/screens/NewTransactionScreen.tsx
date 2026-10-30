@@ -136,8 +136,8 @@ export default function NewTransactionScreen() {
   }, [tipo, contas, cartoes, origem]);
 
   useEffect(() => {
-    if (repeticao === 'parcelado' && origem?.kind !== 'cartao') setRepeticao('nao');
-  }, [origem, repeticao]);
+    if (repeticao === 'parcelado' && tipo !== 'DESPESA') setRepeticao('nao');
+  }, [tipo, repeticao]);
 
   const categoriasDoTipo = useMemo(
     () => (tipo === 'TRANSFERENCIA' ? [] : categorias.filter((c) => c.tipo === tipo)),
@@ -174,8 +174,8 @@ export default function NewTransactionScreen() {
       numero_parcela: 1,
       total_parcelas: 1,
       recorrente: repeticao === 'mensal',
-      pessoa_id: origemCompartilhada && !quem.dividido ? quem.pessoaId : null,
-      dividido: origemCompartilhada && quem.dividido,
+      pessoa_id: tipo !== 'TRANSFERENCIA' && !quem.dividido ? quem.pessoaId : null,
+      dividido: tipo !== 'TRANSFERENCIA' && quem.dividido,
     };
     const statusPara = (d: Date, cartao: boolean) => (cartao || d <= hoje ? 'EFETIVADA' : 'PENDENTE') as NovaTransacao['status'];
 
@@ -198,8 +198,9 @@ export default function NewTransactionScreen() {
     const noCartao = origem!.kind === 'cartao';
     const destino = noCartao ? { conta_id: null, cartao_id: origem!.id } : { conta_id: origem!.id, cartao_id: null };
 
-    if (repeticao === 'parcelado' && noCartao) {
+    if (repeticao === 'parcelado') {
       // Divide em centavos; a diferença de arredondamento fica na 1ª parcela.
+      // No cartão cada parcela cai numa fatura; na conta as futuras ficam pendentes.
       const totalCents = Math.round(valor * 100);
       const parcelaCents = Math.floor(totalCents / parcelas);
       const resto = totalCents - parcelaCents * parcelas;
@@ -212,7 +213,7 @@ export default function NewTransactionScreen() {
           recorrente: false,
           valor: (sinal * (parcelaCents + (i === 0 ? resto : 0))) / 100,
           data_transacao: toISODate(d),
-          status: statusPara(d, true),
+          status: statusPara(d, noCartao),
           numero_parcela: i + 1,
           total_parcelas: parcelas,
         };
@@ -298,6 +299,34 @@ export default function NewTransactionScreen() {
 
   const cor = TIPO_COR[tipo];
   const contasDestino = contas.filter((c) => c.id !== origem?.id);
+  const despesa = tipo === 'DESPESA';
+
+  const origemChips = (
+    <View style={styles.chips}>
+      {contas.map((c) => (
+        <Chip
+          key={c.id}
+          label={c.nome}
+          selected={origem?.kind === 'conta' && origem.id === c.id}
+          onPress={() => setOrigem({ kind: 'conta', id: c.id })}
+        />
+      ))}
+      {despesa
+        ? cartoes.map((k) => (
+            <Chip
+              key={k.id}
+              label={`💳 ${k.nome}`}
+              color={colors.warning}
+              selected={origem?.kind === 'cartao' && origem.id === k.id}
+              onPress={() => setOrigem({ kind: 'cartao', id: k.id })}
+            />
+          ))
+        : null}
+      {contas.length === 0 && cartoes.length === 0 ? (
+        <Text style={styles.muted}>Cadastre uma conta no Início ou um cartão em Cartões.</Text>
+      ) : null}
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -362,9 +391,44 @@ export default function NewTransactionScreen() {
             </>
           ) : null}
 
-          {origemCompartilhada ? (
+          {/* Despesa: forma de pagamento à vista ou parcelada, na conta ou no cartão */}
+          {despesa ? (
+            <>
+              <Text style={styles.label}>Pago com</Text>
+              {origemChips}
+              <Text style={styles.label}>Forma de pagamento</Text>
+              <View style={styles.chips}>
+                <Chip
+                  label="À vista"
+                  selected={repeticao !== 'parcelado'}
+                  onPress={() => repeticao === 'parcelado' && setRepeticao('nao')}
+                />
+                <Chip label="Parcelado" selected={repeticao === 'parcelado'} onPress={() => setRepeticao('parcelado')} />
+              </View>
+              {repeticao === 'parcelado' ? (
+                <>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+                    {PARCELAS.map((n) => (
+                      <Chip key={n} label={`${n}x`} selected={parcelas === n} onPress={() => setParcelas(n)} />
+                    ))}
+                  </ScrollView>
+                  {valor > 0 ? (
+                    <Text style={[styles.muted, { marginBottom: spacing.md }]}>
+                      {parcelas}x de {formatCurrency(valor / parcelas)}
+                      {origem?.kind === 'cartao' ? ' nas próximas faturas' : ' mensais (as futuras ficam pendentes)'}
+                    </Text>
+                  ) : null}
+                </>
+              ) : null}
+            </>
+          ) : null}
+
+          {tipo !== 'TRANSFERENCIA' && (origemCompartilhada || pessoas.length > 0) ? (
             <View style={styles.quemBox}>
-              <Text style={styles.label}>Quem? • {origemLabel()} (compartilhado)</Text>
+              <Text style={styles.label}>
+                {despesa ? 'Quem gastou?' : 'Quem recebeu?'}
+                {origemCompartilhada ? ` • ${origemLabel()} (compartilhado)` : ' (opcional)'}
+              </Text>
               {pessoas.length > 0 ? (
                 <QuemSelector pessoas={pessoas} value={quem} onChange={setQuem} />
               ) : (
@@ -404,31 +468,12 @@ export default function NewTransactionScreen() {
 
           {showDetails ? (
             <View style={styles.details}>
-              <Text style={styles.label}>{tipo === 'TRANSFERENCIA' ? 'Conta de origem' : 'Conta ou cartão'}</Text>
-              <View style={styles.chips}>
-                {contas.map((c) => (
-                  <Chip
-                    key={c.id}
-                    label={c.nome}
-                    selected={origem?.kind === 'conta' && origem.id === c.id}
-                    onPress={() => setOrigem({ kind: 'conta', id: c.id })}
-                  />
-                ))}
-                {tipo === 'DESPESA'
-                  ? cartoes.map((k) => (
-                      <Chip
-                        key={k.id}
-                        label={`💳 ${k.nome}`}
-                        color={colors.warning}
-                        selected={origem?.kind === 'cartao' && origem.id === k.id}
-                        onPress={() => setOrigem({ kind: 'cartao', id: k.id })}
-                      />
-                    ))
-                  : null}
-                {contas.length === 0 && cartoes.length === 0 ? (
-                  <Text style={styles.muted}>Cadastre uma conta no Início ou um cartão em Cartões.</Text>
-                ) : null}
-              </View>
+              {!despesa ? (
+                <>
+                  <Text style={styles.label}>{tipo === 'TRANSFERENCIA' ? 'Conta de origem' : 'Conta'}</Text>
+                  {origemChips}
+                </>
+              ) : null}
 
               {tipo === 'TRANSFERENCIA' ? (
                 <>
@@ -462,26 +507,13 @@ export default function NewTransactionScreen() {
 
               <Text style={styles.label}>Repetição</Text>
               <View style={styles.chips}>
-                <Chip label="Não repetir" selected={repeticao === 'nao'} onPress={() => setRepeticao('nao')} />
+                <Chip
+                  label="Não repetir"
+                  selected={repeticao !== 'mensal'}
+                  onPress={() => repeticao === 'mensal' && setRepeticao('nao')}
+                />
                 <Chip label="Repetir mensalmente" selected={repeticao === 'mensal'} onPress={() => setRepeticao('mensal')} />
-                {origem?.kind === 'cartao' && tipo === 'DESPESA' ? (
-                  <Chip label="Parcelar" selected={repeticao === 'parcelado'} onPress={() => setRepeticao('parcelado')} />
-                ) : null}
               </View>
-              {repeticao === 'parcelado' ? (
-                <>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-                    {PARCELAS.map((n) => (
-                      <Chip key={n} label={`${n}x`} selected={parcelas === n} onPress={() => setParcelas(n)} />
-                    ))}
-                  </ScrollView>
-                  {valor > 0 ? (
-                    <Text style={styles.muted}>
-                      {parcelas}x de {formatCurrency(valor / parcelas)} nas próximas faturas
-                    </Text>
-                  ) : null}
-                </>
-              ) : null}
               {repeticao === 'mensal' ? (
                 <Text style={styles.muted}>
                   Serão criados {OCORRENCIAS_RECORRENTES} lançamentos mensais. Os futuros ficam como pendentes.

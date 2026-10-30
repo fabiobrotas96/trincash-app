@@ -116,8 +116,8 @@ export function EditarLancamentoSheet({
       cartao_id: noCartao ? origem.id : null,
       // Compras no cartão são sempre efetivadas; a fatura é que fica em aberto.
       status: noCartao ? ('EFETIVADA' as const) : status,
-      pessoa_id: compartilhada && !quem.dividido ? quem.pessoaId : null,
-      dividido: compartilhada && quem.dividido,
+      pessoa_id: !transferencia && !quem.dividido ? quem.pessoaId : null,
+      dividido: !transferencia && quem.dividido,
     };
 
     setSaving(true);
@@ -217,9 +217,9 @@ export function EditarLancamentoSheet({
                   : null}
               </View>
 
-              {compartilhada ? (
+              {compartilhada || pessoas.length > 0 ? (
                 <>
-                  <Text style={styles.label}>Quem?</Text>
+                  <Text style={styles.label}>{tipo === 'RECEITA' ? 'Quem recebeu?' : 'Quem gastou?'}</Text>
                   {pessoas.length ? (
                     <QuemSelector pessoas={pessoas} value={quem} onChange={setQuem} />
                   ) : (
