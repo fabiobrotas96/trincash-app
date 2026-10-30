@@ -1,5 +1,5 @@
 import type { Categoria, TipoCategoria } from '../types';
-import { toISODate } from '../utils/format';
+import { toISODate, today } from '../utils/format';
 
 // ---------------------------------------------------------------------
 // Importação de extratos bancários (OFX ou CSV exportados pelo banco)
@@ -14,7 +14,7 @@ export interface ItemImportado {
 }
 
 export interface ExtratoLido {
-  formato: 'OFX' | 'CSV';
+  formato: 'OFX' | 'CSV' | 'PDF';
   /** Nome do banco, quando o arquivo informa (OFX). */
   banco: string | null;
   itens: ItemImportado[];
@@ -186,6 +186,100 @@ function lerCSV(texto: string): ExtratoLido {
 }
 
 // ---------------------------------------------------------------------
+// PDF (texto extraído com pdf.js, agrupado em linhas pela posição)
+// ---------------------------------------------------------------------
+
+/** Trecho de texto de uma página do PDF, com a posição (y cresce para cima). */
+export interface TextoPdf {
+  pagina: number;
+  x: number;
+  y: number;
+  texto: string;
+}
+
+const DINHEIRO = /-?\s?R\$\s?-?\s?[\d.]+,\d{2}|-?[\d.]*\d,\d{2}\b/g;
+const DATA_INICIO = /^(\d{2}[/-]\d{2}(?:[/-]\d{2,4})?)\b/;
+
+/** Agrupa os trechos em linhas (mesma página e altura) e as células da esquerda para a direita. */
+function agruparLinhas(itens: TextoPdf[]): string[][] {
+  const linhas: { pagina: number; y: number; cells: { x: number; t: string }[] }[] = [];
+  for (const it of itens) {
+    const t = it.texto.trim();
+    if (!t) continue;
+    let l = linhas.find((x) => x.pagina === it.pagina && Math.abs(x.y - it.y) <= 2);
+    if (!l) linhas.push((l = { pagina: it.pagina, y: it.y, cells: [] }));
+    l.cells.push({ x: it.x, t });
+  }
+  return linhas
+    .sort((a, b) => a.pagina - b.pagina || b.y - a.y)
+    .map((l) => l.cells.sort((a, b) => a.x - b.x).map((c) => c.t));
+}
+
+/**
+ * Extratos em PDF: cada movimento é uma linha que começa com a data e tem o
+ * valor (e às vezes o saldo depois). Descrições longas quebram em linhas sem
+ * data logo acima e/ou abaixo — elas são juntadas ao movimento.
+ */
+export function lerPDF(itens: TextoPdf[]): ExtratoLido {
+  const linhas = agruparLinhas(itens);
+  const textoTodo = linhas.map((l) => l.join(' ')).join('\n');
+  // Ano para datas sem ano (DD/MM): o mais frequente entre as datas completas do arquivo.
+  const anos = [...textoTodo.matchAll(/\b\d{2}[/-]\d{2}[/-](\d{4})\b/g)].map((m) => m[1]);
+  const anoPadrao = anos.sort((a, b) => anos.filter((x) => x === b).length - anos.filter((x) => x === a).length)[0]
+    ?? String(today().getFullYear());
+
+  /** esperaAbaixo: a descrição começou acima da linha da data, então continua abaixo dela. */
+  type Mov = ItemImportado & { esperaAbaixo: boolean; partes: string[] };
+  const movs: Mov[] = [];
+  let soltas: string[] = [];
+  const ignorar = (texto: string) => {
+    const n = normalizar(texto);
+    return /^\d+ ?\/ ?\d+$/.test(n) || (/\bdata\b/.test(n) && /\b(valor|saldo)\b/.test(n));
+  };
+
+  for (const cells of linhas) {
+    const juntas = cells.join(' ');
+    const m = cells[0]?.match(DATA_INICIO);
+    const valores = juntas.match(DINHEIRO);
+    if (!m || !valores) {
+      if (!ignorar(juntas)) soltas.push(juntas);
+      continue;
+    }
+    let dataTxt = m[1];
+    if (dataTxt.length <= 5) dataTxt = `${dataTxt}/${anoPadrao}`;
+    const data = lerData(dataTxt);
+    // Com valor e saldo na linha, o valor é o primeiro.
+    const valor = lerValor(valores[0]);
+    if (!data || !Number.isFinite(valor) || valor === 0) {
+      soltas.push(juntas);
+      continue;
+    }
+    const inline = juntas
+      .replace(DATA_INICIO, '')
+      .replace(DINHEIRO, ' ')
+      .replace(/\b\d{8,}\b/g, ' ') // IDs da operação
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Linhas soltas entre dois movimentos: a primeira fecha a descrição do
+    // anterior (se ela continua abaixo da data); a última abre a do atual.
+    const anterior = movs[movs.length - 1];
+    if (anterior?.esperaAbaixo && soltas.length) anterior.partes.push(soltas.shift()!);
+    const acima = soltas.slice(-1);
+    movs.push({ data, valor, descricao: '', esperaAbaixo: !inline || acima.length > 0, partes: [...acima, ...(inline ? [inline] : [])] });
+    soltas = [];
+  }
+  const ultimo = movs[movs.length - 1];
+  if (ultimo?.esperaAbaixo && soltas.length) ultimo.partes.push(soltas[0]);
+
+  return {
+    formato: 'PDF',
+    banco: null,
+    itens: movs.map(({ data, valor, partes }) => ({ data, valor, descricao: partes.join(' ').slice(0, 200) })),
+  };
+}
+
+// ---------------------------------------------------------------------
 // Datas e valores em formatos brasileiros
 // ---------------------------------------------------------------------
 
@@ -243,7 +337,7 @@ const REGRAS: { categoria: string; tipo: TipoCategoria; padrao: RegExp }[] = [
   { categoria: 'Assinaturas', tipo: 'DESPESA', padrao: /netflix|spotify|prime video|amazon prime|disney|hbo|max\.com|youtube|apple\.com|icloud|google (one|storage)|deezer|globoplay|paramount|chatgpt|openai|claude/ },
   { categoria: 'Alimentação', tipo: 'DESPESA', padrao: /ifood|rappi|restaurante|lanchonete|padaria|panificadora|supermercado|mercado(?! ?(livre|pago))|atacadao|assai|carrefour|pao de acucar|hortifruti|acougue|pizza|burger|mc ?donalds|bk |subway|cafe|lanches|sorvete/ },
   { categoria: 'Transporte', tipo: 'DESPESA', padrao: /uber|\b99\b|99 ?app|cabify|posto|combustivel|gasolina|shell|ipiranga|petrobras|br mania|estacionamento|estapar|pedagio|sem parar|veloe|conectcar|move mais|eixo sp|autoban|ccr |arteris|ecovias|metro|cptm|onibus|bilhete unico|taxi/ },
-  { categoria: 'Moradia', tipo: 'DESPESA', padrao: /aluguel|condominio|energia|enel|cpfl|cemig|light |copel|elektro|sabesp|saneamento|agua e esgoto|comgas|naturgy|internet|vivo|claro|\btim\b|oi fibra|net servicos/ },
+  { categoria: 'Moradia', tipo: 'DESPESA', padrao: /aluguel|condominio|energia|enel|cpfl|cemig|light |copel|elektro|forca e luz|energisa|neoenergia|sabesp|saneamento|agua e esgoto|comgas|naturgy|internet|vivo|telefonica|claro|\btim\b|oi fibra|net servicos/ },
   { categoria: 'Saúde', tipo: 'DESPESA', padrao: /farmacia|drogaria|droga ?raia|drogasil|pague menos|panvel|odonto|dental|hospital|clinica|laboratorio|exame|unimed|amil|sulamerica|bradesco saude|hapvida|medic|psicolog/ },
   { categoria: 'Educação', tipo: 'DESPESA', padrao: /escola|colegio|faculdade|universidade|mensalidade|curso|udemy|alura|hotmart|livraria|papelaria/ },
   { categoria: 'Lazer', tipo: 'DESPESA', padrao: /cinema|cinemark|ingresso|sympla|eventim|steam|playstation|xbox|nintendo|\bbar\b|choperia|cervejaria|show|teatro|parque|viagem|hotel|airbnb|booking/ },
@@ -267,6 +361,17 @@ export function sugerirCategoria(descricao: string, valor: number, categorias: C
     }
   }
   return porNome(FALLBACK[tipo]) ?? doTipo[0]?.id ?? null;
+}
+
+/**
+ * Movimentações entre a conta e as caixinhas/cofrinhos do próprio banco
+ * (ex.: "Dinheiro reservado", "Dinheiro retirado" no Mercado Pago). Não são
+ * gastos nem receitas, então chegam desmarcadas na importação.
+ */
+export function ehMovimentacaoInterna(descricao: string): boolean {
+  return /^dinheiro (reservado|retirado|guardado)|caixinha|cofrinho|porquinho|aplicacao automatica|resgate automatico/.test(
+    normalizar(descricao),
+  );
 }
 
 // ---------------------------------------------------------------------

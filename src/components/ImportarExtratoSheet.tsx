@@ -5,11 +5,14 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Alert } from '../utils/alert';
 import {
   decodificarArquivo,
+  ehMovimentacaoInterna,
   lerExtrato,
+  lerPDF,
   marcarDuplicados,
   sugerirCategoria,
   type ItemImportado,
 } from '../services/importacao';
+import { textoDoPdf } from '../services/pdf';
 import { carregarPessoas } from '../services/finance';
 import { errorMessage, getUserId, supabase } from '../services/supabase';
 import { colors, radius, spacing } from '../theme';
@@ -21,6 +24,8 @@ import { BottomSheet, Chip, PrimaryButton } from './ui';
 interface Linha extends ItemImportado {
   incluir: boolean;
   duplicado: boolean;
+  /** Movimentação com caixinha/cofrinho do próprio banco. */
+  interno: boolean;
   categoriaId: string | null;
 }
 
@@ -89,12 +94,16 @@ export function ImportarExtratoSheet({
     const asset = res.assets[0];
     setLendo(true);
     try {
-      if (/\.pdf$/i.test(asset.name) || asset.mimeType === 'application/pdf') {
-        throw new Error('Arquivos PDF ainda não são aceitos. Exporte o extrato em OFX ou CSV no app/site do banco.');
-      }
       const bytes = asset.file ? await asset.file.arrayBuffer() : await (await fetch(asset.uri)).arrayBuffer();
-      const extrato = lerExtrato(decodificarArquivo(bytes));
-      if (!extrato.itens.length) throw new Error('Nenhum lançamento encontrado no arquivo.');
+      const pdf = /\.pdf$/i.test(asset.name) || asset.mimeType === 'application/pdf';
+      const extrato = pdf ? lerPDF(await textoDoPdf(bytes)) : lerExtrato(decodificarArquivo(bytes));
+      if (!extrato.itens.length) {
+        throw new Error(
+          pdf
+            ? 'Nenhum lançamento encontrado no PDF. Se ele for uma imagem escaneada, exporte o extrato em OFX ou CSV.'
+            : 'Nenhum lançamento encontrado no arquivo.',
+        );
+      }
 
       // Lançamentos já existentes na conta no mesmo período, para marcar duplicados.
       const datas = extrato.itens.map((i) => i.data).sort();
@@ -114,12 +123,16 @@ export function ImportarExtratoSheet({
       setArquivo({ nome: asset.name, banco: extrato.banco, formato: extrato.formato });
       setLinhas(
         extrato.itens
-          .map((it, i) => ({
-            ...it,
-            duplicado: dup[i],
-            incluir: !dup[i],
-            categoriaId: sugerirCategoria(it.descricao, it.valor, categorias),
-          }))
+          .map((it, i) => {
+            const interno = ehMovimentacaoInterna(it.descricao);
+            return {
+              ...it,
+              duplicado: dup[i],
+              interno,
+              incluir: !dup[i] && !interno,
+              categoriaId: sugerirCategoria(it.descricao, it.valor, categorias),
+            };
+          })
           .sort((a, b) => b.data.localeCompare(a.data)),
       );
     } catch (err) {
@@ -140,6 +153,7 @@ export function ImportarExtratoSheet({
     return { entradas, saidas };
   }, [selecionadas]);
   const duplicados = linhas.filter((l) => l.duplicado).length;
+  const internos = linhas.filter((l) => l.interno && !l.duplicado).length;
 
   const atualizar = (i: number, patch: Partial<Linha>) =>
     setLinhas((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -202,7 +216,7 @@ export function ImportarExtratoSheet({
             {contas.length === 0 ? <Text style={styles.muted}>Cadastre uma conta no Início antes de importar.</Text> : null}
           </View>
           <Text style={[styles.muted, { marginBottom: spacing.lg }]}>
-            Exporte o extrato no app ou site do banco em OFX (Itaú, Bradesco, C6, Caixa...) ou CSV e selecione o arquivo.
+            Exporte o extrato no app ou site do banco em OFX (Itaú, Bradesco, C6, Caixa...), CSV ou PDF e selecione o arquivo.
             Você revisa tudo antes de salvar.
           </Text>
           <PrimaryButton title="Escolher arquivo" icon="document-attach-outline" onPress={escolherArquivo} loading={lendo} />
@@ -216,6 +230,7 @@ export function ImportarExtratoSheet({
             <Text style={styles.muted}>
               {linhas.length} lançamentos no arquivo • {selecionadas.length} selecionados
               {duplicados ? ` • ${duplicados} já existem no app (desmarcados)` : ''}
+              {internos ? ` • ${internos} movimentações de caixinha (desmarcadas)` : ''}
             </Text>
             <Text style={styles.muted}>
               Entradas <Text style={{ color: colors.success }}>{formatCurrency(totais.entradas)}</Text> • Saídas{' '}
@@ -240,7 +255,7 @@ export function ImportarExtratoSheet({
                   </Text>
                   <Text style={styles.muted}>
                     {formatDateLabel(l.data)}
-                    {l.duplicado ? ' • possível duplicado' : ''}
+                    {l.duplicado ? ' • possível duplicado' : l.interno ? ' • caixinha / cofrinho' : ''}
                   </Text>
                 </View>
                 <Text style={[styles.valor, { color: l.valor < 0 ? colors.danger : colors.success }]}>
