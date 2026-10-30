@@ -1,9 +1,11 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshControl, SectionList, StyleSheet, Text, View } from 'react-native';
+import { RefreshControl, SectionList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Alert } from '../utils/alert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { EditarLancamentoSheet } from '../components/EditarLancamentoSheet';
+import { ImportarExtratoSheet } from '../components/ImportarExtratoSheet';
 import { GastosPorPessoaCard, PessoasEditor } from '../components/Pessoas';
 import { TransactionItem } from '../components/TransactionItem';
 import { BottomSheet, Card, Chip, EmptyState, ErrorBanner, Loading, ScreenHeader } from '../components/ui';
@@ -44,6 +46,7 @@ export default function ExtratoScreen() {
   const [filtroPessoa, setFiltroPessoa] = useState<FiltroPessoa>('todos');
   const [pessoasModal, setPessoasModal] = useState(false);
   const [editando, setEditando] = useState<TransacaoDetalhada | null>(null);
+  const [importando, setImportando] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -148,6 +151,12 @@ export default function ExtratoScreen() {
         title={title}
         subtitle={contaId ? (conjunta ? 'Conta conjunta' : 'Extrato da conta') : 'Todas as contas e cartões'}
         onBack={onBack}
+        right={
+          <TouchableOpacity onPress={() => setImportando(true)} style={styles.importBtn} accessibilityLabel="Importar extrato">
+            <Ionicons name="cloud-upload-outline" size={18} color={colors.primary} />
+            <Text style={styles.importText}>Importar</Text>
+          </TouchableOpacity>
+        }
       />
 
       {loading ? (
@@ -236,6 +245,7 @@ export default function ExtratoScreen() {
       )}
 
       <EditarLancamentoSheet transacao={editando} onClose={() => setEditando(null)} onSaved={load} />
+      <ImportarExtratoSheet visible={importando} contaId={contaId} onClose={() => setImportando(false)} onImported={load} />
 
       <BottomSheet visible={pessoasModal} title="Pessoas" onClose={() => setPessoasModal(false)}>
         <Text style={styles.hint}>As mesmas pessoas valem para todas as contas e cartões compartilhados e para os investimentos.</Text>
@@ -255,6 +265,8 @@ const styles = StyleSheet.create({
   summaryDivider: { width: 1, alignSelf: 'stretch', backgroundColor: colors.border, marginHorizontal: spacing.lg },
   filters: { flexDirection: 'row', gap: spacing.sm },
   hint: { color: colors.textMuted, fontSize: 11, marginTop: spacing.sm },
+  importBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 6 },
+  importText: { color: colors.primary, fontWeight: '700', fontSize: 13 },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
