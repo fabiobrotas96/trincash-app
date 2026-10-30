@@ -17,6 +17,9 @@
 # 2. Cria 1 GB de swap (as instâncias gratuitas têm 1 GB de RAM).
 # 3. Instala o Caddy (servidor web) e o rsync, libera 80/443 no firewall
 #    do Ubuntu e cria /var/www/trincash.
+# 4. Segurança: SSH só por chave (sem root, sem X11, 3 tentativas),
+#    fail2ban contra força bruta no SSH, rpcbind desligado e atualizações
+#    de segurança aplicadas.
 # No painel da Oracle, a porta 80 (e 443, com domínio) precisa estar
 # liberada nas regras de entrada da subnet (Security List).
 # =====================================================================
@@ -109,6 +112,10 @@ $ENDERECO {
 		# Com HTTPS, o navegador passa a usar sempre https neste endereço
 		# (ignorado quando o site é servido só por http).
 		Strict-Transport-Security "max-age=31536000"
+		# O app não usa câmera, microfone nem localização
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		# Não anuncia qual servidor web está rodando
+		-Server
 	}
 
 	# App de página única: qualquer caminho cai no index.html
@@ -128,6 +135,41 @@ fi
 sudo caddy validate --config /etc/caddy/Caddyfile >/dev/null
 sudo systemctl enable --now caddy
 sudo systemctl reload caddy
+
+echo "==> Segurança: SSH só por chave"
+sudo tee /etc/ssh/sshd_config.d/10-trincash-hardening.conf >/dev/null <<'CONF'
+# Endurecimento do SSH (Trincash) — acesso só por chave, usuário ubuntu
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+X11Forwarding no
+MaxAuthTries 3
+LoginGraceTime 30
+CONF
+sudo sshd -t && sudo systemctl reload ssh
+
+echo "==> Segurança: fail2ban (bloqueia IPs que erram o login do SSH)"
+sudo apt-get install -y fail2ban
+sudo tee /etc/fail2ban/jail.d/sshd.local >/dev/null <<'CONF'
+[sshd]
+enabled  = true
+backend  = systemd
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+# Reincidentes ficam bloqueados por mais tempo (até 1 semana)
+bantime.increment = true
+bantime.maxtime   = 1w
+CONF
+sudo systemctl enable --now fail2ban
+sudo systemctl restart fail2ban
+
+echo "==> Segurança: rpcbind (compartilhamento NFS, sem uso aqui)"
+sudo systemctl disable --now rpcbind.socket rpcbind.service 2>/dev/null || true
+
+echo "==> Segurança: atualizações"
+sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confold upgrade
+[ -f /var/run/reboot-required ] && echo "   Reinicie o servidor (sudo reboot) para aplicar as atualizações do sistema."
 
 echo "==> Resultado"
 free -h | head -3

@@ -44,4 +44,4 @@ O app web fica em **https://147-15-48-165.sslip.io** (Ubuntu 24.04; Caddy servin
 
 - Publicar uma atualização (no Codespace): `bash deploy/publicar.sh ubuntu@147.15.48.165`
 - Servidor novo: rode `deploy/preparar_servidor.sh 147-15-48-165.sslip.io` nele (limpeza, swap, Caddy, HTTPS e firewall). Troque pelo IP do servidor (`1-2-3-4.sslip.io`) ou por um domínio próprio.
-- O acesso SSH usa a chave `~/.ssh/trincash_oracle` do Codespace (não fica no repositório).
+- O acesso SSH usa a chave `~/.ssh/trincash_oracle` (não fica no repositório; cópia em Google Drive → Pessoal/TRINCASH). Login só por chave, sem root; o fail2ban bloqueia IPs que erram o login.
